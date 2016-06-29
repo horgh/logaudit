@@ -66,8 +66,6 @@ func main() {
 		log.Fatalf("Unable to find log files: %s", err.Error())
 	}
 
-	log.Printf("%v", logFiles)
-
 	// Examine each log file one by one and output any relevant entries.
 	err = auditLogs(args.LogDir, logFiles, config, args.ShowIgnoredOnly)
 	if err != nil {
@@ -210,8 +208,6 @@ func findLogFiles(root string) ([]string, error) {
 		return nil, fmt.Errorf("Root is not a directory: %s", root)
 	}
 
-	log.Printf("Entering directory [%s]", root)
-
 	files, err := fh.Readdirnames(0)
 	if err != nil {
 		fh.Close()
@@ -274,8 +270,6 @@ func auditLogs(logDirRoot string, logFiles []string,
 	}
 
 	for _, logFile := range logFiles {
-		log.Printf("%s...", logFile)
-
 		err := auditLog(logDirRoot, logFile, logConfigs, ignorePatterns,
 			showIgnoredOnly)
 		if err != nil {
