@@ -33,6 +33,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Args holds the command line arguments.
@@ -46,6 +47,9 @@ type Args struct {
 	// ShowIgnoredOnly is a flag to do the inverse of usual operations. I figure
 	// it may be useful to see what the program excludes for some double checking.
 	ShowIgnoredOnly bool
+
+	// Location is the time zone location.
+	Location *time.Location
 }
 
 // LogConfig is a block read from the config file. It describes what to do with
@@ -64,10 +68,32 @@ type LogConfig struct {
 	// from other logs (syslog for instance).
 	IncludeAllIgnorePatterns bool
 
+	// TimeLayout is a time layout format. See the Constants section on the
+	// Go time package page.
+	TimeLayout string
+
 	// IgnorePatterns holds the regular expressions that we apply to determine
 	// whether a log line should be ignored or not.
 	IgnorePatterns []*regexp.Regexp
 }
+
+// LogLine holds information about a single log line.
+type LogLine struct {
+	// Path to its log.
+	Log string
+
+	// The line itself.
+	Line string
+
+	// Its timestamp.
+	Time time.Time
+}
+
+type ByTime []LogLine
+
+func (s ByTime) Less(i, j int) bool { return s[i].Time.Before(s[j].Time) }
+func (s ByTime) Len() int           { return len(s) }
+func (s ByTime) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
 func main() {
 	// Turn down log output prefix verbosity.
@@ -89,7 +115,8 @@ func main() {
 	}
 
 	// Examine each log file one by one and output any relevant entries.
-	err = auditLogs(args.LogDir, logFiles, config, args.ShowIgnoredOnly)
+	err = auditLogs(args.LogDir, logFiles, config, args.ShowIgnoredOnly,
+		args.Location)
 	if err != nil {
 		log.Fatalf("Failure examining logs: %s", err.Error())
 	}
@@ -100,6 +127,7 @@ func getArgs() (Args, error) {
 	logDir := flag.String("log-dir", "/var/log", "Path to directory containing logs.")
 	config := flag.String("config", "", "Path to the configuration file. See logs.conf.sample for an example.")
 	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines. Note this won't show lines from files that are configured as fully ignored.")
+	locationString := flag.String("location", "America/Vancouver", "Timezone location. IANA Time Zone database name.")
 
 	flag.Parse()
 
@@ -129,10 +157,19 @@ func getArgs() (Args, error) {
 			*config)
 	}
 
+	if len(*locationString) == 0 {
+		return Args{}, fmt.Errorf("Please provide a time zone location.")
+	}
+	location, err := time.LoadLocation(*locationString)
+	if err != nil {
+		return Args{}, fmt.Errorf("Invalid location: %s", err.Error())
+	}
+
 	return Args{
 		LogDir:          *logDir,
 		ConfigFile:      *config,
 		ShowIgnoredOnly: *showIgnored,
+		Location:        location,
 	}, nil
 }
 
@@ -151,6 +188,12 @@ func getArgs() (Args, error) {
 //   This causes all other log patterns to be included when ignoring lines in
 //   the log. This is useful for logs that have lines that are also in other
 //   lines, such as /var/log/syslog.
+//
+// TimeLayout: Time layout string
+//   This allows you to specify the timestamp format of the log. It must be
+//   at the beginning of the log line. The format for this string is the same
+//   as Go's time layout.
+//   If you don't specify this, the default is time.Stamp.
 //
 // Ignore: regexp
 //   A regexp applied to each line. If it matches, the line gets ignored.
@@ -181,6 +224,9 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 		matches := nameRe.FindStringSubmatch(text)
 		if matches != nil {
 			if config.FilenamePattern != "" {
+				if config.TimeLayout == "" {
+					config.TimeLayout = time.Stamp
+				}
 				configs = append(configs, config)
 			}
 			config = LogConfig{FilenamePattern: matches[1]}
@@ -207,6 +253,16 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 			continue
 		}
 
+		timeLayoutRe := regexp.MustCompile("^TimeLayout: (.+)")
+		matches = timeLayoutRe.FindStringSubmatch(text)
+		if matches != nil {
+			if config.FilenamePattern == "" {
+				return nil, fmt.Errorf("You must set FilenamePattern to start a config block.")
+			}
+			config.TimeLayout = matches[1]
+			continue
+		}
+
 		patternRe := regexp.MustCompile("^Ignore: (.+)")
 		matches = patternRe.FindStringSubmatch(text)
 		if matches != nil {
@@ -223,6 +279,9 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 
 	// Ensure we store the last config block we were reading.
 	if config.FilenamePattern != "" {
+		if config.TimeLayout == "" {
+			config.TimeLayout = time.Stamp
+		}
 		configs = append(configs, config)
 	}
 
@@ -307,7 +366,7 @@ func findLogFiles(root string) ([]string, error) {
 // about the contents at all and we skip it entirely. For others we filter out
 // for lines of interest.
 func auditLogs(logDirRoot string, logFiles []string,
-	logConfigs []LogConfig, showIgnoredOnly bool) error {
+	logConfigs []LogConfig, showIgnoredOnly bool, location *time.Location) error {
 
 	// Gather all ignore patterns in one slice - we use them all at once sometimes
 	// and this is handy.
@@ -316,11 +375,34 @@ func auditLogs(logDirRoot string, logFiles []string,
 		ignorePatterns = append(ignorePatterns, logConfig.IgnorePatterns...)
 	}
 
+	// Gather log lines together.
+	// Key by the log pattern so we group related lines of logs together.
+	logToLines := make(map[string][]LogLine)
+
 	for _, logFile := range logFiles {
-		err := auditLog(logDirRoot, logFile, logConfigs, ignorePatterns,
-			showIgnoredOnly)
+		err := auditLog(logToLines, logDirRoot, logFile, logConfigs, ignorePatterns,
+			showIgnoredOnly, location)
 		if err != nil {
 			return fmt.Errorf("auditLog: %s", err.Error())
+		}
+	}
+
+	// Sort keys (log patterns) first.
+	logKeys := []string{}
+	for k, _ := range logToLines {
+		logKeys = append(logKeys, k)
+	}
+
+	sort.Strings(logKeys)
+
+	for _, logKey := range logKeys {
+		// Sort lines by time. This is because we've gathered them from logs in
+		// order of their file names which is not representative of the actual
+		// log entry time.
+		sort.Sort(ByTime(logToLines[logKey]))
+
+		for _, line := range logToLines[logKey] {
+			log.Printf("%s: %s", line.Log, line.Line)
 		}
 	}
 
@@ -335,8 +417,9 @@ func auditLogs(logDirRoot string, logFiles []string,
 // It then decides what to do with its contents. Either the contents are
 // fully ignored, or patterns are applied line by line to decide whether
 // to exclude them from displaying or not.
-func auditLog(logDirRoot string, logFile string, logConfigs []LogConfig,
-	allIgnorePatterns []*regexp.Regexp, showIgnoredOnly bool) error {
+func auditLog(logToLines map[string][]LogLine, logDirRoot string, logFile string,
+	logConfigs []LogConfig, allIgnorePatterns []*regexp.Regexp,
+	showIgnoredOnly bool, location *time.Location) error {
 	for _, logConfig := range logConfigs {
 		match, err := fileMatch(logDirRoot, logFile, logConfig.FilenamePattern)
 		if err != nil {
@@ -359,10 +442,18 @@ func auditLog(logDirRoot string, logFile string, logConfigs []LogConfig,
 			ignorePatterns = logConfig.IgnorePatterns
 		}
 
-		err = filterLogLines(logFile, ignorePatterns, showIgnoredOnly)
+		logLines, err := filterLogLines(logFile, ignorePatterns, showIgnoredOnly,
+			location, logConfig.TimeLayout)
 		if err != nil {
 			return fmt.Errorf("filterLogLines: %s: %s", logFile, err.Error())
 		}
+
+		_, ok := logToLines[logConfig.FilenamePattern]
+		if !ok {
+			logToLines[logConfig.FilenamePattern] = []LogLine{}
+		}
+		logToLines[logConfig.FilenamePattern] = append(
+			logToLines[logConfig.FilenamePattern], logLines...)
 
 		return nil
 	}
@@ -389,10 +480,11 @@ func fileMatch(logDirRoot string, logFile string, path string) (bool, error) {
 // If the line matches an ignore pattern, then we don't log the line.
 // Otherwise we log it.
 func filterLogLines(path string, ignoreRegexps []*regexp.Regexp,
-	showIgnoredOnly bool) error {
+	showIgnoredOnly bool, location *time.Location,
+	timeLayout string) ([]LogLine, error) {
 	fh, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("Open: %s: %s", path, err.Error())
+		return nil, fmt.Errorf("Open: %s: %s", path, err.Error())
 	}
 
 	defer fh.Close()
@@ -401,7 +493,7 @@ func filterLogLines(path string, ignoreRegexps []*regexp.Regexp,
 	if strings.HasSuffix(path, ".gz") {
 		gz, err := gzip.NewReader(fh)
 		if err != nil {
-			return fmt.Errorf("gzip.NewReader: %s: %s", path, err.Error())
+			return nil, fmt.Errorf("gzip.NewReader: %s: %s", path, err.Error())
 		}
 		defer gz.Close()
 
@@ -409,6 +501,16 @@ func filterLogLines(path string, ignoreRegexps []*regexp.Regexp,
 	} else {
 		scanner = bufio.NewScanner(fh)
 	}
+
+	// Track the last time we were able to parse a line's time in this log.
+	// Why? Because some logs don't have a timestamp on every line but we can
+	// apply a prior line's time as useful to a later line.
+	// e.g., samba log lines are split over multiple lines, and apt/history.log
+	// has multi line entries.
+	var lastLineTime time.Time
+	var zeroTime time.Time
+
+	var logLines []LogLine
 
 LineLoop:
 	for scanner.Scan() {
@@ -418,24 +520,101 @@ LineLoop:
 			continue
 		}
 
+		// Parse its time, if possible.
+		lineTime, err := parseLineTime(text, location, timeLayout)
+		if err != nil {
+			if lastLineTime == zeroTime {
+				log.Printf("Line's time could not be determined: %s: %s", text,
+					err.Error())
+				lineTime = lastLineTime
+			}
+		} else {
+			lastLineTime = lineTime
+		}
+
 		for _, re := range ignoreRegexps {
 			if re.MatchString(text) {
 				if showIgnoredOnly {
-					log.Printf("%s: %s", path, text)
+					logLines = append(logLines, LogLine{
+						Log:  path,
+						Line: text,
+						Time: lineTime,
+					})
 				}
 				continue LineLoop
 			}
 		}
 
 		if !showIgnoredOnly {
-			log.Printf("%s: %s", path, text)
+			logLines = append(logLines, LogLine{
+				Log:  path,
+				Line: text,
+				Time: lineTime,
+			})
 		}
 	}
 
 	err = scanner.Err()
 	if err != nil {
-		return fmt.Errorf("Scanner: %s", err.Error())
+		return nil, fmt.Errorf("Scanner: %s", err.Error())
 	}
 
-	return nil
+	return logLines, nil
+}
+
+// parseLineTime attempts to parse the timestamp from the log line.
+func parseLineTime(line string, location *time.Location,
+	timeLayout string) (time.Time, error) {
+	// ParseInLocation does not like there to be extra text. It wants only the
+	// timestamp portion to be present. Let's try to strip off only the timestamp.
+
+	// I do this by counting how many spaces are in the layout, and then trying
+	// to copy from the line until we have the same number of spaces copied.
+
+	var lastChar rune
+
+	lineStamp := ""
+	for _, c := range line {
+		if c == ' ' {
+			// Stop when we have as many space blocks as the layout.
+			// Ensure we don't mistake a new block for the current one by checking
+			// the last character we saw.
+			if countCharBlocksInString(lineStamp, ' ') ==
+				countCharBlocksInString(timeLayout, ' ') &&
+				lastChar != ' ' {
+				break
+			}
+		}
+
+		lineStamp += string(c)
+		lastChar = c
+	}
+
+	lineTime, err := time.ParseInLocation(timeLayout, lineStamp, location)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("Could not parse [%s] with layout [%s]: %s",
+			lineStamp, timeLayout, err.Error())
+	}
+
+	return lineTime, nil
+}
+
+// countCharBlocksInString counts how many parts of a string consist of
+// 1 or more of a character. e.g., "ab c" has 1, and so does "ab  c".
+func countCharBlocksInString(s string, c rune) int {
+	count := 0
+
+	var last rune
+
+	for _, b := range s {
+		if b == c {
+			if last == c {
+				continue
+			}
+			count++
+		}
+		last = b
+	}
+
+	return count
 }
