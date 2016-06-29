@@ -50,6 +50,10 @@ type Args struct {
 
 	// Location is the time zone location.
 	Location *time.Location
+
+	// FilterStartTime sets the time to bound log lines. Log lines to show must
+	// be on or after this time.
+	FilterStartTime time.Time
 }
 
 // LogConfig is a block read from the config file. It describes what to do with
@@ -116,7 +120,7 @@ func main() {
 
 	// Examine each log file one by one and output any relevant entries.
 	err = auditLogs(args.LogDir, logFiles, config, args.ShowIgnoredOnly,
-		args.Location)
+		args.Location, args.FilterStartTime)
 	if err != nil {
 		log.Fatalf("Failure examining logs: %s", err.Error())
 	}
@@ -128,6 +132,7 @@ func getArgs() (Args, error) {
 	config := flag.String("config", "", "Path to the configuration file. See logs.conf.sample for an example.")
 	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines. Note this won't show lines from files that are configured as fully ignored.")
 	locationString := flag.String("location", "America/Vancouver", "Timezone location. IANA Time Zone database name.")
+	filterStartTimeString := flag.String("filter-start-time", "1999-12-31", "Filter log lines to those on or after the given timestamp. Format: YYYY-MM-DD HH:MM:SS or YYYY-MM-DD.")
 
 	flag.Parse()
 
@@ -165,11 +170,25 @@ func getArgs() (Args, error) {
 		return Args{}, fmt.Errorf("Invalid location: %s", err.Error())
 	}
 
+	if len(*filterStartTimeString) == 0 {
+		return Args{}, fmt.Errorf("Please provide a filter start time.")
+	}
+	filterStartTime, err := time.ParseInLocation("2006-01-02 15:04:05",
+		*filterStartTimeString, location)
+	if err != nil {
+		filterStartTime, err = time.ParseInLocation("2006-01-02",
+			*filterStartTimeString, location)
+		if err != nil {
+			return Args{}, fmt.Errorf("Invalid filter start time (%s): %s. Please use format YYYY-MM-DD HH:MM:SS or YYYY-MM-DD.", *filterStartTimeString, err.Error())
+		}
+	}
+
 	return Args{
 		LogDir:          *logDir,
 		ConfigFile:      *config,
 		ShowIgnoredOnly: *showIgnored,
 		Location:        location,
+		FilterStartTime: filterStartTime,
 	}, nil
 }
 
@@ -366,7 +385,8 @@ func findLogFiles(root string) ([]string, error) {
 // about the contents at all and we skip it entirely. For others we filter out
 // for lines of interest.
 func auditLogs(logDirRoot string, logFiles []string,
-	logConfigs []LogConfig, showIgnoredOnly bool, location *time.Location) error {
+	logConfigs []LogConfig, showIgnoredOnly bool, location *time.Location,
+	filterStartTime time.Time) error {
 
 	// Gather all ignore patterns in one slice - we use them all at once sometimes
 	// and this is handy.
@@ -402,6 +422,9 @@ func auditLogs(logDirRoot string, logFiles []string,
 		sort.Sort(ByTime(logToLines[logKey]))
 
 		for _, line := range logToLines[logKey] {
+			if line.Time.Before(filterStartTime) {
+				continue
+			}
 			log.Printf("%s: %s", line.Log, line.Line)
 		}
 	}
@@ -526,6 +549,7 @@ LineLoop:
 			if lastLineTime == zeroTime {
 				log.Printf("Line's time could not be determined: %s: %s", text,
 					err.Error())
+			} else {
 				lineTime = lastLineTime
 			}
 		} else {
@@ -594,6 +618,21 @@ func parseLineTime(line string, location *time.Location,
 	if err != nil {
 		return time.Time{}, fmt.Errorf("Could not parse [%s] with layout [%s]: %s",
 			lineStamp, timeLayout, err.Error())
+	}
+
+	// Unspecified fields become zero. Like year for time layouts.
+	// Put zero years in the current year. Yes, this is invalid when we roll
+	// over in December/January if we're not careful.
+	if lineTime.Year() == 0 {
+		// Assumption: If it is January and the line we see is in December, then
+		// it is in the current year - 1. Otherwise, put the line in the current
+		// year.
+		year := time.Now().Year()
+		if time.Now().Month() == time.January && lineTime.Month() == time.December {
+			year = time.Now().Year() - 1
+		}
+
+		lineTime = lineTime.AddDate(year, 0, 0)
 	}
 
 	return lineTime, nil
