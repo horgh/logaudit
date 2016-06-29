@@ -9,9 +9,10 @@
  * This program will examine all log files in /var/log. It will report any it
  * does not know about so they can be supported. It will look at each log file
  * it knows about and trim out all log messages that I do not care to see. It
- * will then show only the useful ones.
+ * will then show only the useful ones. It does this based by using regular
+ * expressions.
  *
- * I hope this to make monitoring the logs more efficient.
+ * I hope this to make monitoring the logs more efficient for me.
  *
  * I am sure there are other solutions out there to do things like this. However
  * I really want fine grained control and to know very deeply about what logs
@@ -34,20 +35,42 @@ import (
 	"strings"
 )
 
+// Args holds the command line arguments.
 type Args struct {
-	LogDir          string
-	ConfigFile      string
+	// LogDir is the directory where the logs are. Typically /var/log.
+	LogDir string
+
+	// ConfigFile is the file describing the logs to look at.
+	ConfigFile string
+
+	// ShowIgnoredOnly is a flag to do the inverse of usual operations. I figure
+	// it may be useful to see what the program excludes for some double checking.
 	ShowIgnoredOnly bool
 }
 
+// LogConfig is a block read from the config file. It describes what to do with
+// a set of logs.
 type LogConfig struct {
-	FilenamePattern          string
-	FullyIgnore              bool
+	// A glob style file pattern. It should be relative to the LogDir.
+	// e.g., auth.log*
+	FilenamePattern string
+
+	// FullyIgnore means the log will not be read at all. Some logs are not useful
+	// to look at line by line. e.g., binary type logs.
+	FullyIgnore bool
+
+	// IncludeAllIgnorePatterns causes log patterns from every LogConfig to be
+	// used when examining the matched log. This is because some logs have lines
+	// from other logs (syslog for instance).
 	IncludeAllIgnorePatterns bool
-	IgnorePatterns           []*regexp.Regexp
+
+	// IgnorePatterns holds the regular expressions that we apply to determine
+	// whether a log line should be ignored or not.
+	IgnorePatterns []*regexp.Regexp
 }
 
 func main() {
+	// Turn down log output prefix verbosity.
 	log.SetFlags(0)
 
 	args, err := getArgs()
@@ -60,7 +83,6 @@ func main() {
 		log.Fatalf("Unable to parse config: %s", err.Error())
 	}
 
-	// Find all log files.
 	logFiles, err := findLogFiles(args.LogDir)
 	if err != nil {
 		log.Fatalf("Unable to find log files: %s", err.Error())
@@ -73,10 +95,11 @@ func main() {
 	}
 }
 
+// getArgs retrieves and validates command line arguments.
 func getArgs() (Args, error) {
 	logDir := flag.String("log-dir", "/var/log", "Path to directory containing logs.")
-	config := flag.String("config", "", "Path to the configuration file.")
-	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines. Note this won't show lines from files that are set as fully ignored.")
+	config := flag.String("config", "", "Path to the configuration file. See logs.conf.sample for an example.")
+	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines. Note this won't show lines from files that are configured as fully ignored.")
 
 	flag.Parse()
 
@@ -84,10 +107,26 @@ func getArgs() (Args, error) {
 		flag.PrintDefaults()
 		return Args{}, fmt.Errorf("You must provide a log directory.")
 	}
+	fi, err := os.Lstat(*logDir)
+	if err != nil {
+		return Args{}, fmt.Errorf("Invalid log directory: %s", err.Error())
+	}
+	if !fi.IsDir() {
+		return Args{}, fmt.Errorf("Invalid log directory: %s: Not a directory.",
+			*logDir)
+	}
 
 	if len(*config) == 0 {
 		flag.PrintDefaults()
 		return Args{}, fmt.Errorf("You must provide a config file.")
+	}
+	fi, err = os.Lstat(*config)
+	if err != nil {
+		return Args{}, fmt.Errorf("Invalid config file: %s", err.Error())
+	}
+	if !fi.Mode().IsRegular() {
+		return Args{}, fmt.Errorf("Invalid config file: %s: Not a regular file.",
+			*config)
 	}
 
 	return Args{
@@ -99,19 +138,24 @@ func getArgs() (Args, error) {
 
 // parseConfig reads the config file into memory.
 //
-// The config looks like this:
+// The config is made up of blocks that start with a FilenamePattern and
+// look like the following. Note all except FilenamePattern are optional.
+//
 // FilenamePattern: path/filepath pattern
 //   e.g. /var/log/auth.log*
+//
 // FullyIgnore: y or n
 //   To ignore the file completely
+//
 // IncludeAllIgnorePatterns: y or n
 //   This causes all other log patterns to be included when ignoring lines in
 //   the log. This is useful for logs that have lines that are also in other
 //   lines, such as /var/log/syslog.
+//
 // Ignore: regexp
 //   A regexp applied to each line. If it matches, the line gets ignored.
 //
-// Blank lines and # comments we ignore.
+// We ignore blank lines and # comments.
 func parseConfig(configFile string) ([]LogConfig, error) {
 	fh, err := os.Open(configFile)
 	if err != nil {
@@ -283,6 +327,14 @@ func auditLogs(logDirRoot string, logFiles []string,
 	return nil
 }
 
+// auditLog examines a single log file.
+//
+// It looks for it being a match of a configured log. If it's not, then
+// this is an error. All log files should be recognized.
+//
+// It then decides what to do with its contents. Either the contents are
+// fully ignored, or patterns are applied line by line to decide whether
+// to exclude them from displaying or not.
 func auditLog(logDirRoot string, logFile string, logConfigs []LogConfig,
 	allIgnorePatterns []*regexp.Regexp, showIgnoredOnly bool) error {
 	for _, logConfig := range logConfigs {
@@ -318,6 +370,11 @@ func auditLog(logDirRoot string, logFile string, logConfigs []LogConfig,
 	return fmt.Errorf("Unrecognized file: %s", logFile)
 }
 
+// fileMatch takes a root directory, the actual path to the log file, and a
+// path pattern that should be a subdirectory under the root. It decides
+// if the root plus the subdirectory pattern match the log file.
+//
+// The pattern is a filepath.Match() pattern.
 func fileMatch(logDirRoot string, logFile string, path string) (bool, error) {
 	pattern := fmt.Sprintf("%s%c%s", logDirRoot, os.PathSeparator, path)
 	match, err := filepath.Match(pattern, logFile)
