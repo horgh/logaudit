@@ -71,8 +71,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failure examining logs: %s", err.Error())
 	}
-
-	log.Printf("Done.")
 }
 
 func getArgs() (Args, error) {
@@ -177,6 +175,11 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 		}
 
 		return nil, fmt.Errorf("Unexpected line: %s", text)
+	}
+
+	// Ensure we store the last config block we were reading.
+	if config.FilenamePattern != "" {
+		configs = append(configs, config)
 	}
 
 	err = scanner.Err()
@@ -322,10 +325,7 @@ func fileMatch(logDirRoot string, logFile string, path string) (bool, error) {
 		return false, fmt.Errorf("filepath.Match: %s: %s: %s", pattern, logFile,
 			err.Error())
 	}
-	if match {
-		return true, nil
-	}
-	return false, nil
+	return match, nil
 }
 
 // fileLogLines opens the log file and reads line by line.
