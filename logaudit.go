@@ -401,7 +401,7 @@ func auditLogs(logDirRoot string, logFiles []string,
 
 	for _, logFile := range logFiles {
 		err := auditLog(logToLines, logDirRoot, logFile, logConfigs, ignorePatterns,
-			showIgnoredOnly, location)
+			showIgnoredOnly, location, filterStartTime)
 		if err != nil {
 			return fmt.Errorf("auditLog: %s", err.Error())
 		}
@@ -422,9 +422,6 @@ func auditLogs(logDirRoot string, logFiles []string,
 		sort.Sort(ByTime(logToLines[logKey]))
 
 		for _, line := range logToLines[logKey] {
-			if line.Time.Before(filterStartTime) {
-				continue
-			}
 			log.Printf("%s: %s", line.Log, line.Line)
 		}
 	}
@@ -442,7 +439,8 @@ func auditLogs(logDirRoot string, logFiles []string,
 // to exclude them from displaying or not.
 func auditLog(logToLines map[string][]LogLine, logDirRoot string, logFile string,
 	logConfigs []LogConfig, allIgnorePatterns []*regexp.Regexp,
-	showIgnoredOnly bool, location *time.Location) error {
+	showIgnoredOnly bool, location *time.Location,
+	filterStartTime time.Time) error {
 	for _, logConfig := range logConfigs {
 		match, err := fileMatch(logDirRoot, logFile, logConfig.FilenamePattern)
 		if err != nil {
@@ -466,7 +464,7 @@ func auditLog(logToLines map[string][]LogLine, logDirRoot string, logFile string
 		}
 
 		logLines, err := filterLogLines(logFile, ignorePatterns, showIgnoredOnly,
-			location, logConfig.TimeLayout)
+			location, logConfig.TimeLayout, filterStartTime)
 		if err != nil {
 			return fmt.Errorf("filterLogLines: %s: %s", logFile, err.Error())
 		}
@@ -504,7 +502,7 @@ func fileMatch(logDirRoot string, logFile string, path string) (bool, error) {
 // Otherwise we log it.
 func filterLogLines(path string, ignoreRegexps []*regexp.Regexp,
 	showIgnoredOnly bool, location *time.Location,
-	timeLayout string) ([]LogLine, error) {
+	timeLayout string, filterStartTime time.Time) ([]LogLine, error) {
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("Open: %s: %s", path, err.Error())
@@ -556,6 +554,13 @@ LineLoop:
 			lastLineTime = lineTime
 		}
 
+		// Filter first. Don't include anything filtered in the "show ignored"
+		// basket. I'll call the ignore patterns something separate from filters.
+		if lineTime.Before(filterStartTime) {
+			continue
+		}
+
+		// Does it match one of our ignore patterns?
 		for _, re := range ignoreRegexps {
 			if re.MatchString(text) {
 				if showIgnoredOnly {
