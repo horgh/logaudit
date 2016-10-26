@@ -2,21 +2,20 @@
  * This program is to make examining log files on an Ubuntu GNU/Linux server
  * simpler.
  *
- * My use case is I admin such a server and want to keep an eye on the logs.
- * There are many log messages I don't really care about. I don't need to see
+ * My use case is I admin a server and want to keep an eye on the logs. There
+ * are many log messages I don't really care about. I don't need to see
  * everything.
  *
  * This program will examine all log files in /var/log. It will report any it
  * does not know about so they can be supported. It will look at each log file
  * it knows about and trim out all log messages that I do not care to see. It
- * will then show only the useful ones. It does this based by using regular
- * expressions.
+ * will then show only the useful ones. It does this using regular expressions.
  *
  * I hope this to make monitoring the logs more efficient for me.
  *
- * I am sure there are other solutions out there to do things like this. However
- * I really want fine grained control and to know very deeply about what logs
- * I watch and what messages I see or do not see. I think creating my own will
+ * I am sure there are other solutions out there to do things like this.
+ * However I want fine grained control and to know deeply about what logs I
+ * watch and what messages I see or do not see. I think creating my own will
  * make this possible.
  */
 
@@ -93,6 +92,7 @@ type LogLine struct {
 	Time time.Time
 }
 
+// ByTime is provides sorting LogLines by time.
 type ByTime []LogLine
 
 func (s ByTime) Less(i, j int) bool { return s[i].Time.Before(s[j].Time) }
@@ -324,22 +324,25 @@ func findLogFiles(root string) ([]string, error) {
 
 	fi, err := fh.Stat()
 	if err != nil {
-		fh.Close()
+		_ = fh.Close()
 		return nil, fmt.Errorf("Stat: %s: %s", root, err.Error())
 	}
 
 	if !fi.IsDir() {
-		fh.Close()
+		_ = fh.Close()
 		return nil, fmt.Errorf("Root is not a directory: %s", root)
 	}
 
 	files, err := fh.Readdirnames(0)
 	if err != nil {
-		fh.Close()
+		_ = fh.Close()
 		return nil, fmt.Errorf("Readdirnames: %s: %s", root, err.Error())
 	}
 
-	fh.Close()
+	err = fh.Close()
+	if err != nil {
+		return nil, fmt.Errorf("fh.Close: %s", err)
+	}
 
 	// Check each file in the directory.
 	// If it is a file, record it. If it is a directory, descend into it.
@@ -409,7 +412,7 @@ func auditLogs(logDirRoot string, logFiles []string,
 
 	// Sort keys (log patterns) first.
 	logKeys := []string{}
-	for k, _ := range logToLines {
+	for k := range logToLines {
 		logKeys = append(logKeys, k)
 	}
 
