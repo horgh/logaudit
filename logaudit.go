@@ -72,14 +72,33 @@ type LogConfig struct {
 	IncludeAllIgnorePatterns bool
 
 	// TimeLayout is a time layout format. See the Constants section on the
-	// Go time package page.
-	// "none" as a special value means to not try to parse a line's time.
+	// Go time package page. We use it to parse timestamps on log lines.
 	TimeLayout string
+
+	// Decide how to get timestamp from a log.
+	// Ideally we will have a timestamp on each log line. However this is not
+	// always the case. For some logs there is a timestamp on some lines but
+	// not others. Likely there are logs where there is no timestamp available.
+	TimestampStrategy TimestampStrategy
 
 	// IgnorePatterns holds the regular expressions that we apply to determine
 	// whether a log line should be ignored or not.
 	IgnorePatterns []*regexp.Regexp
 }
+
+// TimestampStrategy specifies a strategy for gathering a line's timestamp.
+type TimestampStrategy int
+
+const (
+	// EveryLine means require each line to have a valid timestamp.
+	EveryLine TimestampStrategy = iota
+
+	// LastLine means to use the timestamp from the last line we parsed with
+	// a valid timestamp. This is useful for logs that have timestamps on some
+	// lines but not others. It means we assign a log line the timestamp of the
+	// last log line that had a timestamp.
+	LastLine
+)
 
 // LogLine holds information about a single log line.
 type LogLine struct {
@@ -215,6 +234,12 @@ func getArgs() (Args, error) {
 //   as Go's time layout.
 //   If you don't specify this, the default is time.Stamp.
 //
+// TimestampStrategy: The method to use to extract timestamps for each log line.
+//   This can currently be "every-line", which means to require a valid
+//   timestamp on each line, or "last-line", which means that some lines in a
+//   log have timestamps, and to apply the timestamp from the last line in the
+//   file that had a timestamp to any lines following it without a timestamp.
+//
 // Ignore: regexp
 //   A regexp applied to each line. If it matches, the line gets ignored.
 //
@@ -244,12 +269,14 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 		matches := nameRe.FindStringSubmatch(text)
 		if matches != nil {
 			if config.FilenamePattern != "" {
-				if config.TimeLayout == "" {
-					config.TimeLayout = time.Stamp
-				}
 				configs = append(configs, config)
 			}
-			config = LogConfig{FilenamePattern: matches[1]}
+			config = LogConfig{
+				FilenamePattern:   matches[1],
+				TimeLayout:        time.Stamp,
+				TimestampStrategy: EveryLine,
+				IgnorePatterns:    []*regexp.Regexp{},
+			}
 			continue
 		}
 
@@ -280,6 +307,22 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 				return nil, fmt.Errorf("You must set FilenamePattern to start a config block.")
 			}
 			config.TimeLayout = matches[1]
+			continue
+		}
+
+		strategyRe := regexp.MustCompile("^TimestampStrategy: (.+)")
+		matches = strategyRe.FindStringSubmatch(text)
+		if matches != nil {
+			if config.FilenamePattern == "" {
+				return nil, fmt.Errorf("You must set FilenamePattern to start a config block.")
+			}
+			if matches[1] == "every-line" {
+				config.TimestampStrategy = EveryLine
+			} else if matches[1] == "last-line" {
+				config.TimestampStrategy = LastLine
+			} else {
+				return nil, fmt.Errorf("Invalid timestamp strategy: %s", matches[1])
+			}
 			continue
 		}
 
@@ -528,7 +571,8 @@ func auditLog(logToLines map[string][]LogLine, logDirRoot, logFile string,
 	}
 
 	logLines, err := filterLogLines(logFile, ignorePatterns, showIgnoredOnly,
-		location, logConfig.TimeLayout, filterStartTime)
+		location, logConfig.TimeLayout, logConfig.TimestampStrategy,
+		filterStartTime)
 	if err != nil {
 		return fmt.Errorf("filterLogLines: %s: %s", logFile, err.Error())
 	}
@@ -563,10 +607,12 @@ func fileMatch(logDirRoot string, logFile string, path string) (bool, error) {
 // Otherwise we log it.
 func filterLogLines(path string, ignoreRegexps []*regexp.Regexp,
 	showIgnoredOnly bool, location *time.Location,
-	timeLayout string, filterStartTime time.Time) ([]LogLine, error) {
+	timeLayout string, timestampStrategy TimestampStrategy,
+	filterStartTime time.Time) ([]LogLine, error) {
+
 	fh, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("Open: %s: %s", path, err.Error())
+		return nil, fmt.Errorf("Open: %s: %s", path, err)
 	}
 
 	defer fh.Close()
@@ -575,7 +621,7 @@ func filterLogLines(path string, ignoreRegexps []*regexp.Regexp,
 	if strings.HasSuffix(path, ".gz") {
 		gz, err := gzip.NewReader(fh)
 		if err != nil {
-			return nil, fmt.Errorf("gzip.NewReader: %s: %s", path, err.Error())
+			return nil, fmt.Errorf("gzip.NewReader: %s: %s", path, err)
 		}
 		defer gz.Close()
 
@@ -610,10 +656,17 @@ LineLoop:
 		// Parse its time, if possible.
 		lineTime, err := parseLineTime(text, location, timeLayout)
 		if err != nil {
-			if lastLineTime == zeroTime {
-				log.Printf("Line's time could not be determined (in log %s): %s: %s",
-					path, text, err.Error())
-			} else {
+			if timestampStrategy == EveryLine {
+				return nil, fmt.Errorf("Line's time could not be determined: %s: %s", text,
+					err)
+			}
+			if timestampStrategy == LastLine {
+				// We've not yet seen any timestamp. This is a problem. We want to apply
+				// the timestamp from the last log line that had one.
+				if lastLineTime == zeroTime {
+					return nil, fmt.Errorf("Line's time could not be determined: %s: %s", text,
+						err)
+				}
 				lineTime = lastLineTime
 			}
 		} else {
@@ -660,12 +713,6 @@ LineLoop:
 // parseLineTime attempts to parse the timestamp from the log line.
 func parseLineTime(line string, location *time.Location,
 	timeLayout string) (time.Time, error) {
-	// If time layout is "none" then don't try to parse time. Not all log formats
-	// have a useful line on each line, such as /var/log/fsck files.
-	if timeLayout == "none" {
-		return time.Unix(0, 0), nil
-	}
-
 	// ParseInLocation does not like there to be extra text. It wants only the
 	// timestamp portion to be present. Let's try to strip off only the timestamp.
 
@@ -693,8 +740,8 @@ func parseLineTime(line string, location *time.Location,
 
 	lineTime, err := time.ParseInLocation(timeLayout, lineStamp, location)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("Could not parse [%s] with layout [%s]: %s",
-			lineStamp, timeLayout, err.Error())
+		return time.Time{}, fmt.Errorf("Could not parse line's timestamp: %s: %s",
+			lineStamp, err)
 	}
 
 	// Unspecified fields become zero. Like year for time layouts.
