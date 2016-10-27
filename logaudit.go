@@ -526,6 +526,11 @@ func filterLogLines(path string, ignoreRegexps []*regexp.Regexp,
 		scanner = bufio.NewScanner(fh)
 	}
 
+	// Increase default buffer size. I ran into max token errors in
+	// apt/history.log.
+	buf := make([]byte, 1024*1024)
+	scanner.Buffer(buf, cap(buf))
+
 	// Track the last time we were able to parse a line's time in this log.
 	// Why? Because some logs don't have a timestamp on every line but we can
 	// apply a prior line's time as useful to a later line.
