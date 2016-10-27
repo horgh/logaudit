@@ -548,8 +548,8 @@ LineLoop:
 		lineTime, err := parseLineTime(text, location, timeLayout)
 		if err != nil {
 			if lastLineTime == zeroTime {
-				log.Printf("Line's time could not be determined: %s: %s", text,
-					err.Error())
+				log.Printf("Line's time could not be determined (in log %s): %s: %s",
+					path, text, err.Error())
 			} else {
 				lineTime = lastLineTime
 			}
