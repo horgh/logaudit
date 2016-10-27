@@ -73,6 +73,7 @@ type LogConfig struct {
 
 	// TimeLayout is a time layout format. See the Constants section on the
 	// Go time package page.
+	// "none" as a special value means to not try to parse a line's time.
 	TimeLayout string
 
 	// IgnorePatterns holds the regular expressions that we apply to determine
@@ -597,6 +598,12 @@ LineLoop:
 // parseLineTime attempts to parse the timestamp from the log line.
 func parseLineTime(line string, location *time.Location,
 	timeLayout string) (time.Time, error) {
+	// If time layout is "none" then don't try to parse time. Not all log formats
+	// have a useful line on each line, such as /var/log/fsck files.
+	if timeLayout == "none" {
+		return time.Unix(0, 0), nil
+	}
+
 	// ParseInLocation does not like there to be extra text. It wants only the
 	// timestamp portion to be present. Let's try to strip off only the timestamp.
 
