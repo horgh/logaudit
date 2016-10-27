@@ -399,6 +399,20 @@ func auditLogs(logDirRoot string, logFiles []string,
 		ignorePatterns = append(ignorePatterns, logConfig.IgnorePatterns...)
 	}
 
+	// First check if there are any logs we don't handle yet. Do this up front
+	// as if we encounter one while examining the contents of logs we will waste
+	// time parsing logs when we'll abort on an unrecognized file anyway.
+	unhandledLogs, err := getUnhandledLogs(logDirRoot, logFiles, logConfigs)
+	if err != nil {
+		return fmt.Errorf("Unable to check for unhandled logs: %s", err)
+	}
+	if len(unhandledLogs) > 0 {
+		for _, logFile := range unhandledLogs {
+			log.Printf("Unhandled log file: %s", logFile)
+		}
+		return fmt.Errorf("There are unhandled log files.")
+	}
+
 	// Gather log lines together.
 	// Key by the log pattern so we group related lines of logs together.
 	logToLines := make(map[string][]LogLine)
@@ -433,6 +447,51 @@ func auditLogs(logDirRoot string, logFiles []string,
 	return nil
 }
 
+// Extract any log files that we do not yet handle.
+//
+// If we do not have a config file entry for the log file then that means we do
+// not handle it yet.
+func getUnhandledLogs(logDirRoot string, logFiles []string,
+	logConfigs []LogConfig) ([]string, error) {
+
+	unhandled := []string{}
+
+	for _, logFile := range logFiles {
+		_, match, err := getConfigForLogFile(logDirRoot, logFile,
+			logConfigs)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to determine config for log file: %s: %s",
+				logFile, err)
+		}
+
+		if match {
+			continue
+		}
+
+		unhandled = append(unhandled, logFile)
+	}
+
+	return unhandled, nil
+}
+
+// Look at each log config. If it matches the log file, return it. We return the
+// first one that matches.
+func getConfigForLogFile(logDirRoot, logFile string,
+	logConfigs []LogConfig) (LogConfig, bool, error) {
+	for _, logConfig := range logConfigs {
+		match, err := fileMatch(logDirRoot, logFile, logConfig.FilenamePattern)
+		if err != nil {
+			return LogConfig{}, false, fmt.Errorf("fileMatch: %s: %s", logFile,
+				err.Error())
+		}
+
+		if match {
+			return logConfig, true, nil
+		}
+	}
+	return LogConfig{}, false, nil
+}
+
 // auditLog examines a single log file.
 //
 // It looks for it being a match of a configured log. If it's not, then
@@ -441,54 +500,52 @@ func auditLogs(logDirRoot string, logFiles []string,
 // It then decides what to do with its contents. Either the contents are
 // fully ignored, or patterns are applied line by line to decide whether
 // to exclude them from displaying or not.
-func auditLog(logToLines map[string][]LogLine, logDirRoot string, logFile string,
+func auditLog(logToLines map[string][]LogLine, logDirRoot, logFile string,
 	logConfigs []LogConfig, allIgnorePatterns []*regexp.Regexp,
 	showIgnoredOnly bool, location *time.Location,
 	filterStartTime time.Time) error {
-	for _, logConfig := range logConfigs {
-		match, err := fileMatch(logDirRoot, logFile, logConfig.FilenamePattern)
-		if err != nil {
-			return fmt.Errorf("fileMatch: %s: %s", logFile, err.Error())
-		}
 
-		if !match {
-			continue
-		}
+	logConfig, match, err := getConfigForLogFile(logDirRoot, logFile,
+		logConfigs)
+	if err != nil {
+		return fmt.Errorf("Unable to determine config for log file: %s: %s",
+			logFile, err)
+	}
+	if !match {
+		return fmt.Errorf("Unrecognized file: %s", logFile)
+	}
 
-		if logConfig.FullyIgnore {
-			return nil
-		}
-
-		var ignorePatterns []*regexp.Regexp
-
-		if logConfig.IncludeAllIgnorePatterns {
-			ignorePatterns = allIgnorePatterns
-		} else {
-			ignorePatterns = logConfig.IgnorePatterns
-		}
-
-		logLines, err := filterLogLines(logFile, ignorePatterns, showIgnoredOnly,
-			location, logConfig.TimeLayout, filterStartTime)
-		if err != nil {
-			return fmt.Errorf("filterLogLines: %s: %s", logFile, err.Error())
-		}
-
-		_, ok := logToLines[logConfig.FilenamePattern]
-		if !ok {
-			logToLines[logConfig.FilenamePattern] = []LogLine{}
-		}
-		logToLines[logConfig.FilenamePattern] = append(
-			logToLines[logConfig.FilenamePattern], logLines...)
-
+	if logConfig.FullyIgnore {
 		return nil
 	}
 
-	return fmt.Errorf("Unrecognized file: %s", logFile)
+	var ignorePatterns []*regexp.Regexp
+
+	if logConfig.IncludeAllIgnorePatterns {
+		ignorePatterns = allIgnorePatterns
+	} else {
+		ignorePatterns = logConfig.IgnorePatterns
+	}
+
+	logLines, err := filterLogLines(logFile, ignorePatterns, showIgnoredOnly,
+		location, logConfig.TimeLayout, filterStartTime)
+	if err != nil {
+		return fmt.Errorf("filterLogLines: %s: %s", logFile, err.Error())
+	}
+
+	_, ok := logToLines[logConfig.FilenamePattern]
+	if !ok {
+		logToLines[logConfig.FilenamePattern] = []LogLine{}
+	}
+	logToLines[logConfig.FilenamePattern] = append(
+		logToLines[logConfig.FilenamePattern], logLines...)
+
+	return nil
 }
 
 // fileMatch takes a root directory, the actual path to the log file, and a
-// path pattern that should be a subdirectory under the root. It decides
-// if the root plus the subdirectory pattern match the log file.
+// path pattern that should be a subdirectory under the root. It decides if the
+// root plus the subdirectory pattern match the log file.
 //
 // The pattern is a filepath.Match() pattern.
 func fileMatch(logDirRoot string, logFile string, path string) (bool, error) {
