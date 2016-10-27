@@ -125,24 +125,24 @@ func main() {
 
 	args, err := getArgs()
 	if err != nil {
-		log.Fatalf("Invalid argument: %s", err.Error())
+		log.Fatalf("Invalid argument: %s", err)
 	}
 
 	config, err := parseConfig(args.ConfigFile)
 	if err != nil {
-		log.Fatalf("Unable to parse config: %s", err.Error())
+		log.Fatalf("Unable to parse config: %s", err)
 	}
 
 	logFiles, err := findLogFiles(args.LogDir)
 	if err != nil {
-		log.Fatalf("Unable to find log files: %s", err.Error())
+		log.Fatalf("Unable to find log files: %s", err)
 	}
 
 	// Examine each log file one by one and output any relevant entries.
 	err = auditLogs(args.LogDir, logFiles, config, args.ShowIgnoredOnly,
 		args.Location, args.FilterStartTime)
 	if err != nil {
-		log.Fatalf("Failure examining logs: %s", err.Error())
+		log.Fatalf("Failure examining logs: %s", err)
 	}
 }
 
@@ -162,7 +162,7 @@ func getArgs() (Args, error) {
 	}
 	fi, err := os.Lstat(*logDir)
 	if err != nil {
-		return Args{}, fmt.Errorf("Invalid log directory: %s", err.Error())
+		return Args{}, fmt.Errorf("Invalid log directory: %s", err)
 	}
 	if !fi.IsDir() {
 		return Args{}, fmt.Errorf("Invalid log directory: %s: Not a directory.",
@@ -175,7 +175,7 @@ func getArgs() (Args, error) {
 	}
 	fi, err = os.Lstat(*config)
 	if err != nil {
-		return Args{}, fmt.Errorf("Invalid config file: %s", err.Error())
+		return Args{}, fmt.Errorf("Invalid config file: %s", err)
 	}
 	if !fi.Mode().IsRegular() {
 		return Args{}, fmt.Errorf("Invalid config file: %s: Not a regular file.",
@@ -187,7 +187,7 @@ func getArgs() (Args, error) {
 	}
 	location, err := time.LoadLocation(*locationString)
 	if err != nil {
-		return Args{}, fmt.Errorf("Invalid location: %s", err.Error())
+		return Args{}, fmt.Errorf("Invalid location: %s", err)
 	}
 
 	if len(*filterStartTimeString) == 0 {
@@ -199,7 +199,7 @@ func getArgs() (Args, error) {
 		filterStartTime, err = time.ParseInLocation("2006-01-02",
 			*filterStartTimeString, location)
 		if err != nil {
-			return Args{}, fmt.Errorf("Invalid filter start time (%s): %s. Please use format YYYY-MM-DD HH:MM:SS or YYYY-MM-DD.", *filterStartTimeString, err.Error())
+			return Args{}, fmt.Errorf("Invalid filter start time (%s): %s. Please use format YYYY-MM-DD HH:MM:SS or YYYY-MM-DD.", *filterStartTimeString, err)
 		}
 	}
 
@@ -247,7 +247,7 @@ func getArgs() (Args, error) {
 func parseConfig(configFile string) ([]LogConfig, error) {
 	fh, err := os.Open(configFile)
 	if err != nil {
-		return nil, fmt.Errorf("Open: %s: %s", configFile, err.Error())
+		return nil, fmt.Errorf("Open: %s: %s", configFile, err)
 	}
 
 	defer fh.Close()
@@ -350,7 +350,7 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 
 	err = scanner.Err()
 	if err != nil {
-		return nil, fmt.Errorf("Scanner: %s", err.Error())
+		return nil, fmt.Errorf("Scanner: %s", err)
 	}
 
 	return configs, nil
@@ -360,7 +360,7 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 func findLogFiles(root string) ([]string, error) {
 	fh, err := os.Open(root)
 	if err != nil {
-		return nil, fmt.Errorf("Open: %s: %s", root, err.Error())
+		return nil, fmt.Errorf("Open: %s: %s", root, err)
 	}
 
 	// I don't defer close here. I'm recursively descending and want to close
@@ -369,7 +369,7 @@ func findLogFiles(root string) ([]string, error) {
 	fi, err := fh.Stat()
 	if err != nil {
 		_ = fh.Close()
-		return nil, fmt.Errorf("Stat: %s: %s", root, err.Error())
+		return nil, fmt.Errorf("Stat: %s: %s", root, err)
 	}
 
 	if !fi.IsDir() {
@@ -380,7 +380,7 @@ func findLogFiles(root string) ([]string, error) {
 	files, err := fh.Readdirnames(0)
 	if err != nil {
 		_ = fh.Close()
-		return nil, fmt.Errorf("Readdirnames: %s: %s", root, err.Error())
+		return nil, fmt.Errorf("Readdirnames: %s: %s", root, err)
 	}
 
 	err = fh.Close()
@@ -398,7 +398,7 @@ func findLogFiles(root string) ([]string, error) {
 
 		fi2, err := os.Lstat(path)
 		if err != nil {
-			return nil, fmt.Errorf("Lstat: %s: %s", path, err.Error())
+			return nil, fmt.Errorf("Lstat: %s: %s", path, err)
 		}
 
 		if fi2.Mode().IsDir() {
@@ -464,7 +464,7 @@ func auditLogs(logDirRoot string, logFiles []string,
 		err := auditLog(logToLines, logDirRoot, logFile, logConfigs, ignorePatterns,
 			showIgnoredOnly, location, filterStartTime)
 		if err != nil {
-			return fmt.Errorf("auditLog: %s", err.Error())
+			return fmt.Errorf("auditLog: %s", err)
 		}
 	}
 
@@ -525,7 +525,7 @@ func getConfigForLogFile(logDirRoot, logFile string,
 		match, err := fileMatch(logDirRoot, logFile, logConfig.FilenamePattern)
 		if err != nil {
 			return LogConfig{}, false, fmt.Errorf("fileMatch: %s: %s", logFile,
-				err.Error())
+				err)
 		}
 
 		if match {
@@ -574,7 +574,7 @@ func auditLog(logToLines map[string][]LogLine, logDirRoot, logFile string,
 		location, logConfig.TimeLayout, logConfig.TimestampStrategy,
 		filterStartTime)
 	if err != nil {
-		return fmt.Errorf("filterLogLines: %s: %s", logFile, err.Error())
+		return fmt.Errorf("filterLogLines: %s: %s", logFile, err)
 	}
 
 	_, ok := logToLines[logConfig.FilenamePattern]
@@ -597,7 +597,7 @@ func fileMatch(logDirRoot string, logFile string, path string) (bool, error) {
 	match, err := filepath.Match(pattern, logFile)
 	if err != nil {
 		return false, fmt.Errorf("filepath.Match: %s: %s: %s", pattern, logFile,
-			err.Error())
+			err)
 	}
 	return match, nil
 }
@@ -704,7 +704,7 @@ LineLoop:
 
 	err = scanner.Err()
 	if err != nil {
-		return nil, fmt.Errorf("Scanner: %s", err.Error())
+		return nil, fmt.Errorf("Scanner: %s", err)
 	}
 
 	return logLines, nil
