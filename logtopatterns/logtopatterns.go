@@ -1,8 +1,10 @@
+//
 // This program is intended to make creating Ignore patterns for logaudit easy.
 //
 // You provide it a log file, and it attempts to combine all similar log lines
 // into one (dropping duplicates, etc). It also replaces pid numbers such as
 // dhclient[1966] to dhclient\[\d+\].
+//
 package main
 
 import (
@@ -81,7 +83,7 @@ func readFile(file string) ([]string, error) {
 func consolidateAndOutput(lines []string) error {
 	// Lines look like so (syslog):
 	// Oct 23 06:31:46 snorri dhclient[1966]: DHCPACK of 192.168.1.3 from 192.168.1.25
-	// Strip up to here       ^
+	// Strip up to here ------^
 
 	uniqueLines := map[string]struct{}{}
 
