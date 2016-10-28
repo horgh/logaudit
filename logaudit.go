@@ -35,6 +35,9 @@ import (
 
 // Args holds the command line arguments.
 type Args struct {
+	// Verbose output.
+	Verbose bool
+
 	// LogDir is the directory where the logs are. Typically /var/log.
 	LogDir string
 
@@ -149,7 +152,7 @@ func main() {
 
 	// Examine each log file one by one and output any relevant entries.
 	err = auditLogs(args.LogDir, logFiles, config, args.ShowIgnoredOnly,
-		args.Location, args.FilterStartTime)
+		args.Location, args.FilterStartTime, args.Verbose)
 	if err != nil {
 		log.Fatalf("Failure examining logs: %s", err)
 	}
@@ -164,6 +167,7 @@ func main() {
 
 // getArgs retrieves and validates command line arguments.
 func getArgs() (Args, error) {
+	verbose := flag.Bool("verbose", false, "Enable verbose output.")
 	logDir := flag.String("log-dir", "/var/log", "Path to directory containing logs.")
 	config := flag.String("config", "", "Path to the configuration file. See logs.conf.sample for an example.")
 	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here (if success), and we filter log lines to those after the run time if the file is present when we start. Note the filter start time argument overrides this.")
@@ -241,6 +245,7 @@ func getArgs() (Args, error) {
 	}
 
 	return Args{
+		Verbose:         *verbose,
 		LogDir:          *logDir,
 		ConfigFile:      *config,
 		StateFile:       *stateFile,
@@ -536,7 +541,7 @@ func findLogFiles(root string) ([]string, error) {
 // for lines of interest.
 func auditLogs(logDirRoot string, logFiles []string,
 	logConfigs []LogConfig, showIgnoredOnly bool, location *time.Location,
-	filterStartTime time.Time) error {
+	filterStartTime time.Time, verbose bool) error {
 
 	// Gather all ignore patterns in one slice - we use them all at once sometimes
 	// and this is handy.
@@ -551,7 +556,7 @@ func auditLogs(logDirRoot string, logFiles []string,
 
 	for _, logFile := range logFiles {
 		err := auditLog(logToLines, logDirRoot, logFile, logConfigs, ignorePatterns,
-			showIgnoredOnly, location, filterStartTime)
+			showIgnoredOnly, location, filterStartTime, verbose)
 		if err != nil {
 			return fmt.Errorf("auditLog: %s", err)
 		}
@@ -608,7 +613,7 @@ func getConfigForLogFile(logDirRoot, logFile string,
 func auditLog(logToLines map[string][]LogLine, logDirRoot, logFile string,
 	logConfigs []LogConfig, allIgnorePatterns []*regexp.Regexp,
 	showIgnoredOnly bool, location *time.Location,
-	filterStartTime time.Time) error {
+	filterStartTime time.Time, verbose bool) error {
 
 	// Skip it if it's modified time is before our start time.
 	fi, err := os.Stat(logFile)
@@ -652,7 +657,7 @@ func auditLog(logToLines map[string][]LogLine, logDirRoot, logFile string,
 
 	logLines, err := filterLogLines(logFile, ignorePatterns, showIgnoredOnly,
 		location, logConfig.TimeLayout, logConfig.TimestampStrategy,
-		filterStartTime)
+		filterStartTime, verbose)
 	if err != nil {
 		return fmt.Errorf("filterLogLines: %s: %s", logFile, err)
 	}
@@ -688,13 +693,16 @@ func fileMatch(logDirRoot string, logFile string, path string) (bool, error) {
 func filterLogLines(path string, ignoreRegexps []*regexp.Regexp,
 	showIgnoredOnly bool, location *time.Location,
 	timeLayout string, timestampStrategy TimestampStrategy,
-	filterStartTime time.Time) ([]LogLine, error) {
+	filterStartTime time.Time, verbose bool) ([]LogLine, error) {
 
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("Stat: %s: %s", path, err)
 	}
 
+	if verbose {
+		log.Printf("Reading in log %s...", path)
+	}
 	lines, err := readLog(path)
 	if err != nil {
 		return nil, err
