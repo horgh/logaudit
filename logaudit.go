@@ -98,6 +98,11 @@ const (
 	// lines but not others. It means we assign a log line the timestamp of the
 	// last log line that had a timestamp.
 	LastLine
+
+	// LastLineOrStat means to apply the log file's modified time to any lines
+	// without a timestamp if they occur prior to seeing a line with a timestamp.
+	// It's a more relaxed version of LastLine.
+	LastLineOrStat
 )
 
 // LogLine holds information about a single log line.
@@ -239,6 +244,11 @@ func getArgs() (Args, error) {
 //   timestamp on each line, or "last-line", which means that some lines in a
 //   log have timestamps, and to apply the timestamp from the last line in the
 //   file that had a timestamp to any lines following it without a timestamp.
+//   It may also be "last-line-or-stat" which means to use the file's modified
+//   time if there was no line parsed yet with a timestamp, but to use the log's
+//   last line timestamp if there was one seen. This is useful if there is a log
+//   that has a line which starts with a line that doesn't have a timestamp yet
+//   some lines do have timestamps.
 //
 // Ignore: regexp
 //   A regexp applied to each line. If it matches, the line gets ignored.
@@ -320,6 +330,8 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 				config.TimestampStrategy = EveryLine
 			} else if matches[1] == "last-line" {
 				config.TimestampStrategy = LastLine
+			} else if matches[1] == "last-line-or-stat" {
+				config.TimestampStrategy = LastLineOrStat
 			} else {
 				return nil, fmt.Errorf("Invalid timestamp strategy: %s", matches[1])
 			}
@@ -610,6 +622,11 @@ func filterLogLines(path string, ignoreRegexps []*regexp.Regexp,
 	timeLayout string, timestampStrategy TimestampStrategy,
 	filterStartTime time.Time) ([]LogLine, error) {
 
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("Stat: %s: %s", path, err)
+	}
+
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("Open: %s: %s", path, err)
@@ -668,6 +685,13 @@ LineLoop:
 						err)
 				}
 				lineTime = lastLineTime
+			}
+			if timestampStrategy == LastLineOrStat {
+				if lastLineTime == zeroTime {
+					lineTime = fi.ModTime()
+				} else {
+					lineTime = lastLineTime
+				}
 			}
 		} else {
 			lastLineTime = lineTime
