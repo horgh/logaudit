@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -39,6 +40,10 @@ type Args struct {
 
 	// ConfigFile is the file describing the logs to look at.
 	ConfigFile string
+
+	// StateFile is a file we record our starting runtime in. We can look at this
+	// file as a way to base when to filter logs starting from.
+	StateFile string
 
 	// ShowIgnoredOnly is a flag to do the inverse of usual operations. I figure
 	// it may be useful to see what the program excludes for some double checking.
@@ -135,6 +140,8 @@ func main() {
 		log.Fatalf("Unable to parse config: %s", err)
 	}
 
+	runStartTime := time.Now()
+
 	logFiles, err := findLogFiles(args.LogDir)
 	if err != nil {
 		log.Fatalf("Unable to find log files: %s", err)
@@ -146,15 +153,23 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failure examining logs: %s", err)
 	}
+
+	if len(args.StateFile) > 0 {
+		err = writeStateFile(args.StateFile, runStartTime)
+		if err != nil {
+			log.Fatalf("Problem writing state file: %s: %s", args.StateFile, err)
+		}
+	}
 }
 
 // getArgs retrieves and validates command line arguments.
 func getArgs() (Args, error) {
 	logDir := flag.String("log-dir", "/var/log", "Path to directory containing logs.")
 	config := flag.String("config", "", "Path to the configuration file. See logs.conf.sample for an example.")
+	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here (if success), and we filter log lines to those after the run time if the file is present when we start. Note the filter start time argument overrides this.")
 	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines. Note this won't show lines from files that are configured as fully ignored.")
 	locationString := flag.String("location", "America/Vancouver", "Timezone location. IANA Time Zone database name.")
-	filterStartTimeString := flag.String("filter-start-time", "1999-12-31", "Filter log lines to those on or after the given timestamp. Format: YYYY-MM-DD HH:MM:SS or YYYY-MM-DD.")
+	filterStartTimeString := flag.String("filter-start-time", "", "Filter log lines to those on or after the given timestamp. Format: YYYY-MM-DD HH:MM:SS or YYYY-MM-DD.")
 
 	flag.Parse()
 
@@ -184,6 +199,27 @@ func getArgs() (Args, error) {
 			*config)
 	}
 
+	var filterStartTime time.Time
+
+	// State file is optional.
+	if len(*stateFile) > 0 {
+		// It may not exist, and that's okay. It could be our first run.
+		_, err := os.Lstat(*stateFile)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return Args{}, fmt.Errorf("Unable to read state file: %s", err)
+			}
+		} else {
+			stateFileTime, err := readStateFileTime(*stateFile)
+			if err != nil {
+				return Args{}, fmt.Errorf("Unable to read state file: %s", err)
+			}
+			// To account for buffered writes, use an hour before the state file time
+			// (which should be when the last run started).
+			filterStartTime = stateFileTime.Add(-time.Hour)
+		}
+	}
+
 	if len(*locationString) == 0 {
 		return Args{}, fmt.Errorf("Please provide a time zone location.")
 	}
@@ -192,26 +228,84 @@ func getArgs() (Args, error) {
 		return Args{}, fmt.Errorf("Invalid location: %s", err)
 	}
 
-	if len(*filterStartTimeString) == 0 {
-		return Args{}, fmt.Errorf("Please provide a filter start time.")
-	}
-	filterStartTime, err := time.ParseInLocation("2006-01-02 15:04:05",
-		*filterStartTimeString, location)
-	if err != nil {
-		filterStartTime, err = time.ParseInLocation("2006-01-02",
+	if len(*filterStartTimeString) > 0 {
+		filterStartTime, err = time.ParseInLocation("2006-01-02 15:04:05",
 			*filterStartTimeString, location)
 		if err != nil {
-			return Args{}, fmt.Errorf("Invalid filter start time (%s): %s. Please use format YYYY-MM-DD HH:MM:SS or YYYY-MM-DD.", *filterStartTimeString, err)
+			filterStartTime, err = time.ParseInLocation("2006-01-02",
+				*filterStartTimeString, location)
+			if err != nil {
+				return Args{}, fmt.Errorf("Invalid filter start time (%s): %s. Please use format YYYY-MM-DD HH:MM:SS or YYYY-MM-DD.", *filterStartTimeString, err)
+			}
 		}
 	}
 
 	return Args{
 		LogDir:          *logDir,
 		ConfigFile:      *config,
+		StateFile:       *stateFile,
 		ShowIgnoredOnly: *showIgnored,
 		Location:        location,
 		FilterStartTime: filterStartTime,
 	}, nil
+}
+
+// Read a state file. It should contain a single value, a unixtime. Parse it and
+// return.
+func readStateFileTime(path string) (time.Time, error) {
+	fh, err := os.Open(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	defer fh.Close()
+
+	scanner := bufio.NewScanner(fh)
+
+	for scanner.Scan() {
+		unixtime, err := strconv.ParseInt(scanner.Text(), 10, 64)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("Malformed time in state file: %s: %s",
+				scanner.Text(), err)
+		}
+		return time.Unix(unixtime, 0), nil
+	}
+
+	err = scanner.Err()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("Scanner: %s", err)
+	}
+
+	return time.Time{}, fmt.Errorf("State file had no content")
+}
+
+// Write the given time to the state file.
+// The state file has no content other than a unixtime.
+func writeStateFile(path string, startTime time.Time) error {
+	fh, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+
+	unixtime := fmt.Sprintf("%d", startTime.Unix())
+
+	n, err := fh.WriteString(unixtime)
+	if err != nil {
+		_ = fh.Close()
+		return err
+	}
+
+	if n != len(unixtime) {
+		_ = fh.Close()
+		return fmt.Errorf("Short write")
+	}
+
+	err = fh.Close()
+	if err != nil {
+		return fmt.Errorf("Close error: %s", err)
+	}
+
+	return nil
 }
 
 // parseConfig reads the config file into memory.
@@ -515,6 +609,15 @@ func auditLog(logToLines map[string][]LogLine, logDirRoot, logFile string,
 	logConfigs []LogConfig, allIgnorePatterns []*regexp.Regexp,
 	showIgnoredOnly bool, location *time.Location,
 	filterStartTime time.Time) error {
+
+	// Skip it if it's modified time is before our start time.
+	fi, err := os.Stat(logFile)
+	if err != nil {
+		return fmt.Errorf("Stat: %s: %s", logFile, err)
+	}
+	if fi.ModTime().Before(filterStartTime) {
+		return nil
+	}
 
 	logConfig, match, err := getConfigForLogFile(logDirRoot, logFile,
 		logConfigs)
