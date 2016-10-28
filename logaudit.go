@@ -177,7 +177,7 @@ func getArgs() (Args, error) {
 		flag.PrintDefaults()
 		return Args{}, fmt.Errorf("You must provide a log directory.")
 	}
-	fi, err := os.Lstat(*logDir)
+	fi, err := os.Stat(*logDir)
 	if err != nil {
 		return Args{}, fmt.Errorf("Invalid log directory: %s", err)
 	}
@@ -190,7 +190,7 @@ func getArgs() (Args, error) {
 		flag.PrintDefaults()
 		return Args{}, fmt.Errorf("You must provide a config file.")
 	}
-	fi, err = os.Lstat(*config)
+	fi, err = os.Stat(*config)
 	if err != nil {
 		return Args{}, fmt.Errorf("Invalid config file: %s", err)
 	}
@@ -204,7 +204,7 @@ func getArgs() (Args, error) {
 	// State file is optional.
 	if len(*stateFile) > 0 {
 		// It may not exist, and that's okay. It could be our first run.
-		_, err := os.Lstat(*stateFile)
+		_, err := os.Stat(*stateFile)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				return Args{}, fmt.Errorf("Unable to read state file: %s", err)
@@ -499,9 +499,9 @@ func findLogFiles(root string) ([]string, error) {
 	for _, filename := range files {
 		path := fmt.Sprintf("%s%c%s", root, os.PathSeparator, filename)
 
-		fi2, err := os.Lstat(path)
+		fi2, err := os.Stat(path)
 		if err != nil {
-			return nil, fmt.Errorf("Lstat: %s: %s", path, err)
+			return nil, fmt.Errorf("Stat: %s: %s", path, err)
 		}
 
 		if fi2.Mode().IsDir() {
