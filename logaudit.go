@@ -1,24 +1,21 @@
-/*
- * This program is to make examining log files on an Ubuntu GNU/Linux server
- * simpler.
- *
- * My use case is I admin a server and want to keep an eye on the logs. There
- * are many log messages I don't really care about. I don't need to see
- * everything.
- *
- * This program will examine all log files in /var/log. It will report any it
- * does not know about so they can be supported. It will look at each log file
- * it knows about and trim out all log messages that I do not care to see. It
- * will then show only the useful ones. It does this using regular expressions.
- *
- * I hope this to make monitoring the logs more efficient for me.
- *
- * I am sure there are other solutions out there to do things like this.
- * However I want fine grained control and to know deeply about what logs I
- * watch and what messages I see or do not see. I think creating my own will
- * make this possible.
- */
-
+//
+// This program is to make examining log files on GNU/Linux machines simpler
+// (Debian/Ubuntu with syslog, specifically).
+//
+// I have a few machines and I want to keep an eye on the logs. One problem is
+// that there are many log messages I don't really care about. Another is that
+// it is time consuming to go and look at each log file on each host.
+//
+// This program examines all log files in /var/log. It outputs all of the log
+// lines at once. You can configure it to ignore certain files all together, or
+// to ignore lines with regexes.
+//
+// I hope this to make monitoring the logs more efficient for me.
+//
+// I know there are other solutions out there to do things like this (such as
+// logwatch). However I want fine grained control and to know deeply about what
+// logs I watch and what messages I see or do not see.
+//
 package main
 
 import (
@@ -454,20 +451,6 @@ func auditLogs(logDirRoot string, logFiles []string,
 		ignorePatterns = append(ignorePatterns, logConfig.IgnorePatterns...)
 	}
 
-	// First check if there are any logs we don't handle yet. Do this up front
-	// as if we encounter one while examining the contents of logs we will waste
-	// time parsing logs when we'll abort on an unrecognized file anyway.
-	unhandledLogs, err := getUnhandledLogs(logDirRoot, logFiles, logConfigs)
-	if err != nil {
-		return fmt.Errorf("Unable to check for unhandled logs: %s", err)
-	}
-	if len(unhandledLogs) > 0 {
-		for _, logFile := range unhandledLogs {
-			log.Printf("Unhandled log file: %s", logFile)
-		}
-		return fmt.Errorf("There are unhandled log files.")
-	}
-
 	// Gather log lines together.
 	// Key by the log pattern so we group related lines of logs together.
 	logToLines := make(map[string][]LogLine)
@@ -500,33 +483,6 @@ func auditLogs(logDirRoot string, logFiles []string,
 	}
 
 	return nil
-}
-
-// Extract any log files that we do not yet handle.
-//
-// If we do not have a config file entry for the log file then that means we do
-// not handle it yet.
-func getUnhandledLogs(logDirRoot string, logFiles []string,
-	logConfigs []LogConfig) ([]string, error) {
-
-	unhandled := []string{}
-
-	for _, logFile := range logFiles {
-		_, match, err := getConfigForLogFile(logDirRoot, logFile,
-			logConfigs)
-		if err != nil {
-			return nil, fmt.Errorf("Unable to determine config for log file: %s: %s",
-				logFile, err)
-		}
-
-		if match {
-			continue
-		}
-
-		unhandled = append(unhandled, logFile)
-	}
-
-	return unhandled, nil
 }
 
 // Look at each log config. If it matches the log file, return it. We return the
@@ -567,7 +523,16 @@ func auditLog(logToLines map[string][]LogLine, logDirRoot, logFile string,
 			logFile, err)
 	}
 	if !match {
-		return fmt.Errorf("Unrecognized file: %s", logFile)
+		log.Printf("Log %s did not match any configuration. Dumping it entirely.",
+			logFile)
+		lines, err := readLog(logFile)
+		if err != nil {
+			return err
+		}
+		for _, line := range lines {
+			log.Printf("%s: %s", logFile, line)
+		}
+		return nil
 	}
 
 	if logConfig.FullyIgnore {
@@ -627,30 +592,10 @@ func filterLogLines(path string, ignoreRegexps []*regexp.Regexp,
 		return nil, fmt.Errorf("Stat: %s: %s", path, err)
 	}
 
-	fh, err := os.Open(path)
+	lines, err := readLog(path)
 	if err != nil {
-		return nil, fmt.Errorf("Open: %s: %s", path, err)
+		return nil, err
 	}
-
-	defer fh.Close()
-
-	var scanner *bufio.Scanner
-	if strings.HasSuffix(path, ".gz") {
-		gz, err := gzip.NewReader(fh)
-		if err != nil {
-			return nil, fmt.Errorf("gzip.NewReader: %s: %s", path, err)
-		}
-		defer gz.Close()
-
-		scanner = bufio.NewScanner(gz)
-	} else {
-		scanner = bufio.NewScanner(fh)
-	}
-
-	// Increase default buffer size. I ran into max token errors in
-	// apt/history.log.
-	buf := make([]byte, 1024*1024)
-	scanner.Buffer(buf, cap(buf))
 
 	// Track the last time we were able to parse a line's time in this log.
 	// Why? Because some logs don't have a timestamp on every line but we can
@@ -663,13 +608,7 @@ func filterLogLines(path string, ignoreRegexps []*regexp.Regexp,
 	var logLines []LogLine
 
 LineLoop:
-	for scanner.Scan() {
-		text := strings.TrimSpace(scanner.Text())
-		if len(text) == 0 ||
-			scanner.Text() == "(Nothing has been logged yet.)" {
-			continue
-		}
-
+	for _, text := range lines {
 		// Parse its time, if possible.
 		lineTime, err := parseLineTime(text, location, timeLayout)
 		if err != nil {
@@ -726,12 +665,53 @@ LineLoop:
 		}
 	}
 
+	return logLines, nil
+}
+
+// Read all log lines into memory.
+func readLog(path string) ([]string, error) {
+	fh, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("Open: %s: %s", path, err)
+	}
+
+	defer fh.Close()
+
+	var scanner *bufio.Scanner
+	if strings.HasSuffix(path, ".gz") {
+		gz, err := gzip.NewReader(fh)
+		if err != nil {
+			return nil, fmt.Errorf("gzip.NewReader: %s: %s", path, err)
+		}
+		defer gz.Close()
+
+		scanner = bufio.NewScanner(gz)
+	} else {
+		scanner = bufio.NewScanner(fh)
+	}
+
+	// Increase default buffer size. I ran into max token errors in
+	// apt/history.log.
+	buf := make([]byte, 1024*1024)
+	scanner.Buffer(buf, cap(buf))
+
+	lines := []string{}
+
+	for scanner.Scan() {
+		text := strings.TrimSpace(scanner.Text())
+		if len(text) == 0 ||
+			scanner.Text() == "(Nothing has been logged yet.)" {
+			continue
+		}
+		lines = append(lines, text)
+	}
+
 	err = scanner.Err()
 	if err != nil {
 		return nil, fmt.Errorf("Scanner: %s", err)
 	}
 
-	return logLines, nil
+	return lines, nil
 }
 
 // parseLineTime attempts to parse the timestamp from the log line.
