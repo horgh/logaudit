@@ -364,6 +364,9 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 
 	var config LogConfig
 
+	// Track if we see the same ignore pattern multiple times.
+	ignoreToFile := map[string]string{}
+
 	for scanner.Scan() {
 		text := strings.TrimSpace(scanner.Text())
 		if len(text) == 0 ||
@@ -439,6 +442,14 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 		if matches != nil {
 			if config.FilenamePattern == "" {
 				return nil, fmt.Errorf("You must set FilenamePattern to start a config block.")
+			}
+
+			file, ok := ignoreToFile[matches[1]]
+			if ok {
+				log.Printf("Warning: Ignore pattern %s is also on file %s", matches[1],
+					file)
+			} else {
+				ignoreToFile[matches[1]] = config.FilenamePattern
 			}
 			config.IgnorePatterns = append(config.IgnorePatterns,
 				regexp.MustCompile(matches[1]))
