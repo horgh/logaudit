@@ -14,10 +14,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,6 +28,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"summercat.com/logaudit/lib"
 )
 
 // Args holds the command line arguments.
@@ -87,18 +92,6 @@ const (
 	LastLineOrStat
 )
 
-// LogLine holds information about a single log line.
-type LogLine struct {
-	// Path to its log.
-	Log string
-
-	// The line itself.
-	Line string
-
-	// Its timestamp.
-	Time time.Time
-}
-
 // LogDir is the directory we find logs in.
 const LogDir = "/var/log"
 
@@ -131,7 +124,7 @@ func main() {
 	}
 
 	err = readAndSubmitLogs(logFiles, configs, args.Location, lastRunTime,
-		args.Verbose)
+		args.Verbose, args.SubmitURL)
 	if err != nil {
 		log.Fatalf("Failure examining logs: %s", err)
 	}
@@ -459,9 +452,10 @@ func findLogFiles(root string) ([]string, error) {
 //
 // Then submit to logauditd.
 func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
-	location *time.Location, lastStartTime time.Time, verbose bool) error {
+	location *time.Location, lastRunTime time.Time, verbose bool,
+	submitURL string) error {
 
-	logToLines := make(map[string][]*LogLine)
+	logToLines := make(map[string][]*lib.LogLine)
 
 	for _, logFile := range logFiles {
 		config, match, err := getConfigForLogFile(logFile, logConfigs)
@@ -478,20 +472,16 @@ func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
 			continue
 		}
 
-		logLines, err := readLog(logFile, config, location, lastStartTime)
+		logLines, err := readLog(logFile, config, location, lastRunTime)
 		if err != nil {
 			return fmt.Errorf("Unable to read log: %s: %s", logFile, err)
 		}
 		logToLines[logFile] = logLines
 	}
 
-	// TODO: Submit
-	for _, lines := range logToLines {
-		for _, line := range lines {
-			if verbose {
-				fmt.Printf("%s: %s\n", line.Log, line.Line)
-			}
-		}
+	err := submit(submitURL, logToLines, verbose, lastRunTime)
+	if err != nil {
+		return fmt.Errorf("Unable to submit logs: %s", err)
 	}
 
 	return nil
@@ -536,7 +526,7 @@ func fileMatch(logDirRoot string, logFile string, path string) (bool, error) {
 //
 // Skip any that are before the last run time.
 func readLog(file string, config LogConfig, location *time.Location,
-	lastRunTime time.Time) ([]*LogLine, error) {
+	lastRunTime time.Time) ([]*lib.LogLine, error) {
 
 	// Skip it if its modified time is before our start time.
 	fi, err := os.Stat(file)
@@ -558,7 +548,7 @@ func readLog(file string, config LogConfig, location *time.Location,
 	}
 
 	// Pull out lines after our last run time.
-	newLines := []*LogLine{}
+	newLines := []*lib.LogLine{}
 	for i, line := range lines {
 		if line.Time.Before(lastRunTime) {
 			continue
@@ -574,7 +564,7 @@ func readLog(file string, config LogConfig, location *time.Location,
 }
 
 // Read all log lines into memory.
-func readFileAsLines(path string) ([]*LogLine, error) {
+func readFileAsLines(path string) ([]*lib.LogLine, error) {
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("Open: %s: %s", path, err)
@@ -600,7 +590,7 @@ func readFileAsLines(path string) ([]*LogLine, error) {
 	buf := make([]byte, 1024*1024)
 	scanner.Buffer(buf, cap(buf))
 
-	lines := []*LogLine{}
+	lines := []*lib.LogLine{}
 
 	for scanner.Scan() {
 		text := strings.TrimSpace(scanner.Text())
@@ -609,7 +599,7 @@ func readFileAsLines(path string) ([]*LogLine, error) {
 			continue
 		}
 
-		lines = append(lines, &LogLine{
+		lines = append(lines, &lib.LogLine{
 			Log:  path,
 			Line: text,
 		})
@@ -624,7 +614,7 @@ func readFileAsLines(path string) ([]*LogLine, error) {
 }
 
 // assignTimeToLines sets a time stamp on each log line.
-func assignTimeToLines(lines []*LogLine, config LogConfig,
+func assignTimeToLines(lines []*lib.LogLine, config LogConfig,
 	location *time.Location, modTime time.Time) error {
 
 	// Track the last time we were able to parse a line's time in this log.
@@ -743,4 +733,53 @@ func countCharBlocksInString(s string, c rune) int {
 	}
 
 	return count
+}
+
+// submit sends the logs to the submission server.
+func submit(submitURL string, logToLines map[string][]*lib.LogLine,
+	verbose bool, lastRunTime time.Time) error {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("Unable to determine my hostname: %s", err)
+	}
+
+	submission := lib.Submission{
+		Hostname:        hostname,
+		EarliestLogTime: lastRunTime,
+	}
+
+	for _, lines := range logToLines {
+		submission.Lines = append(submission.Lines, lines...)
+		for _, line := range lines {
+			if verbose {
+				fmt.Printf("%s: %s\n", line.Log, line.Line)
+			}
+		}
+	}
+
+	// We don't really need to submit if there are somehow zero log lines, but it
+	// is good to be able to see we are still alive.
+
+	submissionJSON, err := json.Marshal(submission)
+	if err != nil {
+		return fmt.Errorf("Unable to generate JSON: %s", err)
+	}
+
+	log.Printf("Submission is %d bytes", len(submissionJSON))
+
+	client := &http.Client{Timeout: 60 * time.Second}
+
+	reader := bytes.NewReader(submissionJSON)
+
+	resp, err := client.Post(submitURL, "application/json", reader)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 200 {
+		return nil
+	}
+
+	return fmt.Errorf("API responded with HTTP %d", resp.StatusCode)
 }
