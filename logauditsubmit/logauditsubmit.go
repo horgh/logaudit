@@ -29,6 +29,9 @@ import (
 
 // Args holds the command line arguments.
 type Args struct {
+	// Verbose output.
+	Verbose bool
+
 	// ConfigFile is the file describing the logs to look at.
 	ConfigFile string
 
@@ -127,7 +130,8 @@ func main() {
 		log.Fatalf("Unable to find log files: %s", err)
 	}
 
-	err = readAndSubmitLogs(logFiles, configs, args.Location, lastRunTime)
+	err = readAndSubmitLogs(logFiles, configs, args.Location, lastRunTime,
+		args.Verbose)
 	if err != nil {
 		log.Fatalf("Failure examining logs: %s", err)
 	}
@@ -140,6 +144,7 @@ func main() {
 
 // getArgs retrieves and validates command line arguments.
 func getArgs() (Args, error) {
+	verbose := flag.Bool("verbose", false, "Enable verbose output.")
 	config := flag.String("config", "", "Path to the configuration file.")
 	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here (if success), and we filter log lines to those after the run time if the file is present when we start. Note the filter start time argument overrides this.")
 	locationString := flag.String("location", "America/Vancouver", "Timezone location. IANA Time Zone database name.")
@@ -177,6 +182,7 @@ func getArgs() (Args, error) {
 	}
 
 	return Args{
+		Verbose:    *verbose,
 		ConfigFile: *config,
 		StateFile:  *stateFile,
 		Location:   location,
@@ -453,7 +459,7 @@ func findLogFiles(root string) ([]string, error) {
 //
 // Then submit to logauditd.
 func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
-	location *time.Location, lastStartTime time.Time) error {
+	location *time.Location, lastStartTime time.Time, verbose bool) error {
 
 	logToLines := make(map[string][]*LogLine)
 
@@ -482,7 +488,9 @@ func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
 	// TODO: Submit
 	for _, lines := range logToLines {
 		for _, line := range lines {
-			fmt.Printf("%s: %s\n", line.Log, line.Line)
+			if verbose {
+				fmt.Printf("%s: %s\n", line.Log, line.Line)
+			}
 		}
 	}
 
