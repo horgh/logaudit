@@ -88,10 +88,6 @@ func readFile(file string) ([]string, error) {
 }
 
 func consolidateAndOutput(lines []string, fromLogaudit bool) error {
-	// Lines look like so (syslog):
-	// Oct 23 06:31:46 snorri dhclient[1966]: DHCPACK of 192.168.1.3 from 192.168.1.25
-	// Strip up to here ------^
-
 	fileToUniqueLines := map[string]map[string]struct{}{}
 
 	logFile := ""
@@ -119,23 +115,29 @@ func consolidateAndOutput(lines []string, fromLogaudit bool) error {
 		kernelRe := regexp.MustCompile("kernel: \\\\\\[\\s*\\d+\\\\\\.\\d+\\\\\\]")
 		line = kernelRe.ReplaceAllString(line, "kernel: \\[\\s*\\d+\\.\\d+\\]")
 
+		// All digits into \d+
+		digitRe := regexp.MustCompile("\\d+")
+		line = digitRe.ReplaceAllString(line, "\\d+")
+
 		// Oct 10 15:15:15 and Oct  1 15:15:15 should split the same. Drop the
 		// problematic extra space in the second.
 		timeRe := regexp.MustCompile("^[A-Za-z]{3}\\s+\\d+")
 		// We drop the date currently, so we can replace it with nonsense.
 		line = timeRe.ReplaceAllString(line, "xxx 99")
 
+		// Lines look like so (syslog):
+		// Oct 23 06:31:46 snorri dhclient[1966]: DHCPACK of 192.168.1.3 from 192.168.1.25
+		// Strip up to here ------^
+
 		pieces := strings.Split(line, " ")
 
-		// All digits into \d+
-		digitRe := regexp.MustCompile("\\d+")
-		for i := range pieces {
-			pieces[i] = digitRe.ReplaceAllString(pieces[i], "\\d+")
+		if len(pieces) >= 5 {
+			line = strings.Join(pieces[4:], " ")
+		} else {
+			line = strings.Join(pieces, " ")
 		}
 
-		strippedLine := strings.Join(pieces[4:], " ")
-
-		fileToUniqueLines[logFile][strippedLine] = struct{}{}
+		fileToUniqueLines[logFile][line] = struct{}{}
 	}
 
 	for logFile, uniqueLines := range fileToUniqueLines {
