@@ -22,6 +22,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -647,9 +648,10 @@ func countCharBlocksInString(s string, c rune) int {
 // submit sends the logs to the submission server.
 func submit(submitURL string, logToLines map[string][]*lib.LogLine,
 	verbose bool, lastRunTime time.Time) error {
-	hostname, err := os.Hostname()
+
+	hostname, err := getHostname()
 	if err != nil {
-		return fmt.Errorf("Unable to determine my hostname: %s", err)
+		return err
 	}
 
 	submission := lib.Submission{
@@ -691,4 +693,22 @@ func submit(submitURL string, logToLines map[string][]*lib.LogLine,
 	}
 
 	return fmt.Errorf("API responded with HTTP %d", resp.StatusCode)
+}
+
+// Retrieve system FQDN.
+//
+// NOTE: This is not portable.
+func getHostname() (string, error) {
+	cmd := exec.Command("hostname", "-f")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("Unable to run hostname command: %s", err)
+	}
+
+	hostname := strings.TrimSpace(string(output))
+	if len(hostname) == 0 {
+		return "", fmt.Errorf("No hostname found")
+	}
+
+	return hostname, nil
 }
