@@ -50,6 +50,10 @@ type LogConfig struct {
 	// e.g., auth.log*
 	FilenamePattern string
 
+	// FullyIgnore means the log will not be read at all. Some logs are not useful
+	// to look at line by line. e.g., binary type logs.
+	FullyIgnore bool
+
 	// TimeLayout is a time layout format. See the Constants section on the
 	// Go time package page. We use it to parse timestamps on log lines.
 	TimeLayout string
@@ -260,6 +264,9 @@ func writeStateFile(path string, startTime time.Time) error {
 // FilenamePattern: path/filepath pattern
 //   e.g. /var/log/auth.log*
 //
+// FullyIgnore: y or n
+//   To ignore the file completely
+//
 // TimeLayout: Time layout string
 //   This allows you to specify the timestamp format of the log. It must be
 //   at the beginning of the log line. The format for this string is the same
@@ -309,6 +316,16 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 				TimeLayout:        time.Stamp,
 				TimestampStrategy: EveryLine,
 			}
+			continue
+		}
+
+		fullyIgnoreRe := regexp.MustCompile("^FullyIgnore: (y|n)$")
+		matches = fullyIgnoreRe.FindStringSubmatch(text)
+		if matches != nil {
+			if config.FilenamePattern == "" {
+				return nil, fmt.Errorf("You must set FilenamePattern to start a config block.")
+			}
+			config.FullyIgnore = matches[1] == "y"
 			continue
 		}
 
@@ -448,6 +465,10 @@ func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
 		}
 		if !match {
 			log.Printf("Log missing configuration: %s", logFile)
+			continue
+		}
+
+		if config.FullyIgnore {
 			continue
 		}
 
