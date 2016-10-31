@@ -20,7 +20,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/lib/pq"
@@ -52,15 +51,6 @@ type Config struct {
 type HTTPHandler struct {
 	Config Config
 }
-
-// DB is the database connection.
-// This is so we try to share a single connection for multiple requests.
-// NOTE: According to the database/sql documentation, the DB type
-//   is indeed safe for concurrent use by multiple goroutines.
-var DB *sql.DB
-
-// DBLock helps us avoid race conditions associated with the database.
-var DBLock sync.Mutex
 
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime)
@@ -262,7 +252,8 @@ func (h HTTPHandler) submitRequest(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, err := getDB(h.Config)
+	db, err := lib.GetDB(h.Config.DBHost, h.Config.DBUser, h.Config.DBPass,
+		h.Config.DBName, h.Config.DBPort)
 	if err != nil {
 		log.Printf("Unable to get database handle: %s", err)
 		rw.WriteHeader(http.StatusInternalServerError)
@@ -398,53 +389,4 @@ func insertLines(db *sql.DB, hostname string, lines []*lib.LogLine) error {
 	}
 
 	return nil
-}
-
-// connectToDB opens a new connection to the database.
-func connectToDB(config Config) (*sql.DB, error) {
-	dsn := fmt.Sprintf("user=%s password=%s dbname=%s host=%s port=%d connect_timeout=10",
-		config.DBUser, config.DBPass, config.DBName, config.DBHost, config.DBPort)
-
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to connect to database: %s", err)
-	}
-
-	log.Print("Opened new connection to the database.")
-	return db, nil
-}
-
-// getDB connects us to the database if necessary, and returns an active
-// database connection.
-//
-// We use the global DB variable to try to ensure we use a single connection.
-func getDB(config Config) (*sql.DB, error) {
-	// If we have a db connection, ensure that it is still available so that we
-	// reconnect if it is not.
-	if DB != nil {
-		err := DB.Ping()
-		if err == nil {
-			return DB, nil
-		}
-
-		log.Printf("Database ping failed: %s", err)
-
-		// Reconnect.
-		DBLock.Lock()
-		DB.Close()
-		DB = nil
-		DBLock.Unlock()
-	}
-
-	DBLock.Lock()
-	defer DBLock.Unlock()
-
-	db, err := connectToDB(config)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to connect to the database: %s", err)
-	}
-
-	DB = db
-
-	return DB, nil
 }

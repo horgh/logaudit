@@ -22,10 +22,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -54,7 +52,7 @@ type Args struct {
 // LogConfig is a block read from the config file. It describes what to do with
 // a set of logs.
 type LogConfig struct {
-	// A glob style file pattern. It should be relative to the LogDir.
+	// A glob style file pattern. It should be relative to the lib.LogDir.
 	// e.g., auth.log*
 	FilenamePattern string
 
@@ -92,9 +90,6 @@ const (
 	LastLineOrStat
 )
 
-// LogDir is the directory we find logs in.
-const LogDir = "/var/log"
-
 func main() {
 	log.SetFlags(0)
 
@@ -105,7 +100,7 @@ func main() {
 		log.Fatalf("Invalid argument: %s", err)
 	}
 
-	stateFileTime, err := readStateFileTime(args.StateFile)
+	stateFileTime, err := lib.ReadStateFileTime(args.StateFile)
 	if err != nil {
 		log.Fatalf("Unable to read state file: %s", err)
 	}
@@ -118,7 +113,7 @@ func main() {
 		log.Fatalf("Unable to parse config: %s", err)
 	}
 
-	logFiles, err := findLogFiles(LogDir)
+	logFiles, err := findLogFiles(lib.LogDir)
 	if err != nil {
 		log.Fatalf("Unable to find log files: %s", err)
 	}
@@ -129,7 +124,7 @@ func main() {
 		log.Fatalf("Failure examining logs: %s", err)
 	}
 
-	err = writeStateFile(args.StateFile, runStartTime)
+	err = lib.WriteStateFile(args.StateFile, runStartTime)
 	if err != nil {
 		log.Fatalf("Problem writing state file: %s: %s", args.StateFile, err)
 	}
@@ -181,77 +176,6 @@ func getArgs() (Args, error) {
 		Location:   location,
 		SubmitURL:  *submitURL,
 	}, nil
-}
-
-// Read a state file. It should contain a single value, a unixtime. Parse it and
-// return.
-//
-// If the file does not exist, return 24 hours ago. It is okay for it not to
-// exist as this could be the first run.
-func readStateFileTime(path string) (time.Time, error) {
-	_, err := os.Stat(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return time.Time{}, fmt.Errorf("Unable to stat state file: %s", err)
-		}
-
-		return time.Now().Add(-24 * time.Hour), nil
-	}
-
-	fh, err := os.Open(path)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	defer fh.Close()
-
-	scanner := bufio.NewScanner(fh)
-
-	for scanner.Scan() {
-		unixtime, err := strconv.ParseInt(scanner.Text(), 10, 64)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("Malformed time in state file: %s: %s",
-				scanner.Text(), err)
-		}
-
-		return time.Unix(unixtime, 0), nil
-	}
-
-	err = scanner.Err()
-	if err != nil {
-		return time.Time{}, fmt.Errorf("Scanner: %s", err)
-	}
-
-	return time.Time{}, fmt.Errorf("State file had no content")
-}
-
-// Write the given time to the state file.
-// The state file has no content other than a unixtime.
-func writeStateFile(path string, startTime time.Time) error {
-	fh, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-
-	unixtime := fmt.Sprintf("%d", startTime.Unix())
-
-	n, err := fh.WriteString(unixtime)
-	if err != nil {
-		_ = fh.Close()
-		return err
-	}
-
-	if n != len(unixtime) {
-		_ = fh.Close()
-		return fmt.Errorf("Short write")
-	}
-
-	err = fh.Close()
-	if err != nil {
-		return fmt.Errorf("Close error: %s", err)
-	}
-
-	return nil
 }
 
 // parseConfig reads the config file into memory.
@@ -492,7 +416,7 @@ func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
 func getConfigForLogFile(logFile string,
 	logConfigs []LogConfig) (LogConfig, bool, error) {
 	for _, logConfig := range logConfigs {
-		match, err := fileMatch(LogDir, logFile, logConfig.FilenamePattern)
+		match, err := lib.FileMatch(lib.LogDir, logFile, logConfig.FilenamePattern)
 		if err != nil {
 			return LogConfig{}, false, fmt.Errorf("fileMatch: %s: %s", logFile,
 				err)
@@ -503,21 +427,6 @@ func getConfigForLogFile(logFile string,
 		}
 	}
 	return LogConfig{}, false, nil
-}
-
-// fileMatch takes a root directory, the actual path to the log file, and a
-// path pattern that should be a subdirectory under the root. It decides if the
-// root plus the subdirectory pattern match the log file.
-//
-// The pattern is a filepath.Match() pattern.
-func fileMatch(logDirRoot string, logFile string, path string) (bool, error) {
-	pattern := fmt.Sprintf("%s%c%s", logDirRoot, os.PathSeparator, path)
-	match, err := filepath.Match(pattern, logFile)
-	if err != nil {
-		return false, fmt.Errorf("filepath.Match: %s: %s: %s", pattern, logFile,
-			err)
-	}
-	return match, nil
 }
 
 // readLog reads a single log file.
