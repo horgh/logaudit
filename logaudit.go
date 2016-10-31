@@ -628,7 +628,7 @@ func auditLog(logToLines map[string][]LogLine, logDirRoot, logFile string,
 	showIgnoredOnly bool, location *time.Location,
 	filterStartTime time.Time, verbose bool) error {
 
-	// Skip it if it's modified time is before our start time.
+	// Skip it if its modified time is before our start time.
 	fi, err := os.Stat(logFile)
 	if err != nil {
 		return fmt.Errorf("Stat: %s: %s", logFile, err)
