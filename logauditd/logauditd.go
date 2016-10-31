@@ -361,7 +361,7 @@ func insertLines(db *sql.DB, hostname string, lines []*lib.LogLine) error {
 	}
 
 	for _, line := range lines {
-		_, err := stmt.Exec(hostname, line.Log, line.Line, line.Time)
+		_, err := stmt.Exec(hostname, line.Log, []byte(line.Line), line.Time)
 		if err != nil {
 			_ = stmt.Close()
 			_ = txn.Rollback()
