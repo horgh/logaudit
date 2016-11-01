@@ -32,6 +32,7 @@ type Args struct {
 	// ConfigFile gives us run time information.
 	ConfigFile string
 
+	// Serve with FCGI protocol (true) or HTTP (false).
 	FCGI bool
 }
 
@@ -216,7 +217,7 @@ func parseConfig(configFile string) (Config, error) {
 
 // ServeHTTP handles an HTTP request.
 func (h HTTPHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	log.Printf("Serving new [%s] request from [%s] to path [%s] (%d bytes)",
+	log.Printf("Serving [%s] request from [%s] to path [%s] (%d bytes)",
 		r.Method, r.RemoteAddr, r.URL.Path, r.ContentLength)
 
 	if r.Method == "POST" && r.URL.Path == "/submit" {
@@ -295,8 +296,12 @@ func (h HTTPHandler) submitRequest(rw http.ResponseWriter, r *http.Request) {
 //
 // We may have duplicate lines as the submission programs try to avoid missing
 // any by pulling lines from a delta time before their last run started.
+//
+// To do this I pull all lines from the start time for this host into memory and
+// then compare.
 func filterLines(db *sql.DB, hostname string, lines []*lib.LogLine,
 	earliestLogTime time.Time) ([]*lib.LogLine, error) {
+
 	query := `SELECT filename, line, time FROM log_line
 	WHERE hostname = $1 AND time >= $2`
 
