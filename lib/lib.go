@@ -17,6 +17,7 @@ import (
 
 // LogLine holds information about a single log line.
 type LogLine struct {
+	// Host that had the line. This is not always populated.
 	Hostname string
 
 	// Path to its log.
@@ -29,12 +30,14 @@ type LogLine struct {
 	Time time.Time
 }
 
-// Submission holds the data we send to the submission server.
+// Submission holds the data we send to the submission (logauditd) server.
 type Submission struct {
+	// Hostname sending the logs.
 	Hostname string
 	// The earliest time a log line will have. We filter out any before this time.
 	EarliestLogTime time.Time
-	Lines           []*LogLine
+	// The lines themselves.
+	Lines []*LogLine
 }
 
 // LogDir is the directory we find logs in.
@@ -46,7 +49,8 @@ const LogDir = "/var/log"
 //   is indeed safe for concurrent use by multiple goroutines.
 var DB *sql.DB
 
-// DBLock helps us avoid race conditions associated with the database.
+// DBLock helps us avoid race conditions associated with the database. Such as
+// connecting to it (assigning the global).
 var DBLock sync.Mutex
 
 // ReadStateFileTime reads a state file.
@@ -152,13 +156,19 @@ func GetDB(host, user, pass, name string, port int) (*sql.DB, error) {
 
 		// Reconnect.
 		DBLock.Lock()
-		_ = DB.Close()
-		DB = nil
+		if DB != nil {
+			_ = DB.Close()
+			DB = nil
+		}
 		DBLock.Unlock()
 	}
 
 	DBLock.Lock()
 	defer DBLock.Unlock()
+
+	if DB != nil {
+		return DB
+	}
 
 	db, err := ConnectToDB(host, user, pass, name, port)
 	if err != nil {
