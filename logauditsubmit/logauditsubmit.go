@@ -133,11 +133,11 @@ func main() {
 
 // getArgs retrieves and validates command line arguments.
 func getArgs() (Args, error) {
-	verbose := flag.Bool("verbose", false, "Enable verbose output.")
+	verbose := flag.Bool("verbose", false, "Enable verbose output. This prints the lines we submit to stdout.")
 	config := flag.String("config", "", "Path to the configuration file.")
-	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here (if success), and we filter log lines to those after the run time if the file is present when we start. Note the filter start time argument overrides this.")
-	locationString := flag.String("location", "America/Vancouver", "Timezone location. IANA Time Zone database name.")
-	submitURL := flag.String("submit-url", "", "URL to submit logs to.")
+	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here. We filter log lines to those after the run time if the file is present when we start.")
+	locationString := flag.String("location", "America/Vancouver", "IANA Time Zone database name. We treat timestamps as being in this timezone.")
+	submitURL := flag.String("submit-url", "", "URL to submit logs to. logaudtid URL.")
 
 	flag.Parse()
 
@@ -224,8 +224,7 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 
 	for scanner.Scan() {
 		text := strings.TrimSpace(scanner.Text())
-		if len(text) == 0 ||
-			strings.HasPrefix(text, "#") {
+		if len(text) == 0 || strings.HasPrefix(text, "#") {
 			continue
 		}
 
@@ -286,9 +285,6 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 
 	// Ensure we store the last config block we were reading.
 	if config.FilenamePattern != "" {
-		if config.TimeLayout == "" {
-			config.TimeLayout = time.Stamp
-		}
 		configs = append(configs, config)
 	}
 
@@ -414,17 +410,17 @@ func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
 
 // Look at each log config. If it matches the log file, return it. We return the
 // first one that matches.
-func getConfigForLogFile(logFile string,
-	logConfigs []LogConfig) (LogConfig, bool, error) {
-	for _, logConfig := range logConfigs {
-		match, err := lib.FileMatch(lib.LogDir, logFile, logConfig.FilenamePattern)
+func getConfigForLogFile(file string,
+	configs []LogConfig) (LogConfig, bool, error) {
+
+	for _, config := range configs {
+		match, err := lib.FileMatch(lib.LogDir, file, config.FilenamePattern)
 		if err != nil {
-			return LogConfig{}, false, fmt.Errorf("fileMatch: %s: %s", logFile,
-				err)
+			return LogConfig{}, false, fmt.Errorf("fileMatch: %s: %s", file, err)
 		}
 
 		if match {
-			return logConfig, true, nil
+			return config, true, nil
 		}
 	}
 	return LogConfig{}, false, nil
@@ -504,14 +500,14 @@ func readFileAsLines(path string) ([]*lib.LogLine, error) {
 
 	for scanner.Scan() {
 		text := strings.TrimSpace(scanner.Text())
-		if len(text) == 0 ||
-			scanner.Text() == "(Nothing has been logged yet.)" {
+		if len(text) == 0 || scanner.Text() == "(Nothing has been logged yet.)" {
 			continue
 		}
 
 		lines = append(lines, &lib.LogLine{
 			Log:  path,
 			Line: text,
+			// Don't figure out the time yet.
 		})
 	}
 
@@ -676,7 +672,9 @@ func submit(submitURL string, logToLines map[string][]*lib.LogLine,
 		return fmt.Errorf("Unable to generate JSON: %s", err)
 	}
 
-	log.Printf("Submission is %d bytes", len(submissionJSON))
+	if verbose {
+		log.Printf("Submission is %d bytes", len(submissionJSON))
+	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
 
