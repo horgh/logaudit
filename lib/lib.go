@@ -132,7 +132,6 @@ func ConnectToDB(host, user, pass, name string, port int) (*sql.DB, error) {
 		return nil, fmt.Errorf("Failed to connect to database: %s", err)
 	}
 
-	log.Print("Opened new connection to the database.")
 	return db, nil
 }
 

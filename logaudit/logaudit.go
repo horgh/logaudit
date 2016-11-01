@@ -90,6 +90,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Unable to read state file: %s", err)
 	}
+	log.Printf("Examining logs on or after %s.", lastRunTime)
 
 	config, configs, err := parseConfig(args.ConfigFile)
 	if err != nil {
