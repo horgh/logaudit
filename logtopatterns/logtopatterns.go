@@ -100,12 +100,12 @@ func consolidateAndOutput(lines []string, fromLogaudit bool) error {
 
 		if fromLogaudit {
 			pieces := strings.Split(line, " ")
-			logFile = pieces[0]
+			logFile = pieces[1]
 			_, ok := fileToUniqueLines[logFile]
 			if !ok {
 				fileToUniqueLines[logFile] = map[string]struct{}{}
 			}
-			line = strings.Join(pieces[1:], " ")
+			line = strings.Join(pieces[2:], " ")
 		}
 
 		line = regexp.QuoteMeta(line)
