@@ -93,11 +93,8 @@ func consolidateAndOutput(lines []string, fromLogaudit bool) error {
 	logFile := ""
 
 	for _, line := range lines {
-		noMatchRe := regexp.MustCompile("^Log \\S+ did not match any configuration\\. Dumping it entirely\\.$")
-		if noMatchRe.MatchString(line) {
-			continue
-		}
-
+		// If this is logaudit output then we have prefix information to strip:
+		// <hostname> <log name> <line starts>
 		if fromLogaudit {
 			pieces := strings.Split(line, " ")
 			logFile = pieces[1]
@@ -115,15 +112,15 @@ func consolidateAndOutput(lines []string, fromLogaudit bool) error {
 		kernelRe := regexp.MustCompile("kernel: \\\\\\[\\s*\\d+\\\\\\.\\d+\\\\\\]")
 		line = kernelRe.ReplaceAllString(line, "kernel: \\[\\s*\\d+\\.\\d+\\]")
 
-		// All digits into \d+
-		digitRe := regexp.MustCompile("\\d+")
-		line = digitRe.ReplaceAllString(line, "\\d+")
-
 		// Oct 10 15:15:15 and Oct  1 15:15:15 should split the same. Drop the
 		// problematic extra space in the second.
 		timeRe := regexp.MustCompile("^[A-Za-z]{3}\\s+\\d+")
 		// We drop the date currently, so we can replace it with nonsense.
 		line = timeRe.ReplaceAllString(line, "xxx 99")
+
+		// Change all digits into \d+
+		digitRe := regexp.MustCompile("\\d+")
+		line = digitRe.ReplaceAllString(line, "\\d+")
 
 		// Lines look like so (syslog):
 		// Oct 23 06:31:46 snorri dhclient[1966]: DHCPACK of 192.168.1.3 from 192.168.1.25
