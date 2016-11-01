@@ -48,7 +48,7 @@ func main() {
 
 func getArgs() (*Args, error) {
 	file := flag.String("file", "", "Path to a log file.")
-	fromLogaudit := flag.Bool("from-logaudit", false, "Toggle true if the file is output from logaudit. This means it will have lines prefixed with log filename.")
+	fromLogaudit := flag.Bool("from-logaudit", true, "Toggle true if the file is output from logaudit. This means it will have lines prefixed with log filename.")
 
 	flag.Parse()
 
@@ -90,9 +90,9 @@ func readFile(file string) ([]string, error) {
 func consolidateAndOutput(lines []string, fromLogaudit bool) error {
 	fileToUniqueLines := map[string]map[string]struct{}{}
 
-	logFile := ""
-
 	for _, line := range lines {
+		logFile := ""
+
 		// If this is logaudit output then we have prefix information to strip:
 		// <hostname> <log name> <line starts>
 		if fromLogaudit {
