@@ -167,7 +167,7 @@ func GetDB(host, user, pass, name string, port int) (*sql.DB, error) {
 	defer DBLock.Unlock()
 
 	if DB != nil {
-		return DB
+		return DB, nil
 	}
 
 	db, err := ConnectToDB(host, user, pass, name, port)
