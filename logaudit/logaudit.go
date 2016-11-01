@@ -113,8 +113,8 @@ func main() {
 func getArgs() (Args, error) {
 	verbose := flag.Bool("verbose", false, "Enable verbose output.")
 	config := flag.String("config", "", "Path to the configuration file.")
-	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here (if success), and we filter log lines to those after the run time if the file is present when we start. Note the filter start time argument overrides this.")
-	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines. Note this won't show lines from files that are configured as fully ignored.")
+	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here. We filter log lines to those after the run time if the file is present when we start.")
+	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines.")
 
 	flag.Parse()
 
@@ -159,7 +159,7 @@ func getArgs() (Args, error) {
 // Ignore: regexp
 //   A regexp applied to each line. If it matches, the line gets ignored.
 //
-// There are also global settings:
+// There are also global (not related to a log file) settings:
 //   DBHost
 //   DBPort
 //   DBUser
@@ -188,8 +188,7 @@ func parseConfig(configFile string) (*Config, []LogConfig, error) {
 	for scanner.Scan() {
 		lineNum++
 		text := strings.TrimSpace(scanner.Text())
-		if len(text) == 0 ||
-			strings.HasPrefix(text, "#") {
+		if len(text) == 0 || strings.HasPrefix(text, "#") {
 			continue
 		}
 
@@ -261,6 +260,7 @@ func parseConfig(configFile string) (*Config, []LogConfig, error) {
 			} else {
 				ignoreToFile[matches[1]] = logConfig.FilenamePattern
 			}
+
 			logConfig.IgnorePatterns = append(logConfig.IgnorePatterns,
 				regexp.MustCompile(matches[1]))
 			continue
@@ -303,7 +303,8 @@ func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly bool,
 	}
 
 	// Gather log lines together.
-	// Key by the log pattern so we group related lines of logs together.
+	// Key by the log pattern so we group related lines of logs together when we
+	// output.
 	logToLines := make(map[string][]*lib.LogLine)
 
 	for _, line := range lines {
@@ -326,6 +327,7 @@ func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly bool,
 		if !exists {
 			logToLines[config.FilenamePattern] = []*lib.LogLine{}
 		}
+
 		logToLines[config.FilenamePattern] = append(
 			logToLines[config.FilenamePattern], line)
 	}
@@ -337,6 +339,7 @@ func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly bool,
 	}
 	sort.Strings(logKeys)
 
+	// Show each log's lines.
 	for _, logKey := range logKeys {
 		// Sort lines by time. This is because we've gathered them from logs in
 		// order of their file names which is not representative of the actual
@@ -405,6 +408,7 @@ func fetchLines(config *Config,
 // first one that matches.
 func getConfigForLogFile(root, file string,
 	configs []LogConfig) (LogConfig, bool, error) {
+
 	for _, config := range configs {
 		match, err := lib.FileMatch(root, file, config.FilenamePattern)
 		if err != nil {
