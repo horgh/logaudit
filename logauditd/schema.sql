@@ -13,8 +13,8 @@ CREATE TABLE log_line (
   -- As there could be binary data.
   line BYTEA NOT NULL,
   time TIMESTAMP WITH TIME ZONE NOT NULL,
-
-  create_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+  create_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (id)
 );
 
 -- The below method for avoiding duplicates is too slow.
