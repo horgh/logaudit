@@ -302,10 +302,7 @@ func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly bool,
 		return fmt.Errorf("Unable to fetch lines from database: %s", err)
 	}
 
-	// Gather log lines together.
-	// Key by the log pattern so we group related lines of logs together when we
-	// output.
-	logToLines := make(map[string][]*lib.LogLine)
+	hostToLogToLines := make(map[string]map[string][]*lib.LogLine)
 
 	for _, line := range lines {
 		config, match, err := getConfigForLogFile(lib.LogDir, line.Log, configs)
@@ -323,31 +320,49 @@ func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly bool,
 			continue
 		}
 
-		_, exists := logToLines[config.FilenamePattern]
+		// Store it in our map.
+
+		_, exists := hostToLogToLines[line.Hostname]
 		if !exists {
-			logToLines[config.FilenamePattern] = []*lib.LogLine{}
+			hostToLogToLines[line.Hostname] = make(map[string][]*lib.LogLine)
 		}
 
-		logToLines[config.FilenamePattern] = append(
-			logToLines[config.FilenamePattern], line)
+		_, exists = hostToLogToLines[line.Hostname][config.FilenamePattern]
+		if !exists {
+			hostToLogToLines[line.Hostname][config.FilenamePattern] = []*lib.LogLine{}
+		}
+
+		hostToLogToLines[line.Hostname][config.FilenamePattern] = append(
+			hostToLogToLines[line.Hostname][config.FilenamePattern], line)
 	}
 
-	// Sort keys (log patterns) first.
-	logKeys := []string{}
-	for k := range logToLines {
-		logKeys = append(logKeys, k)
+	// Output. We show all logs for one host before showing any for the next. We
+	// order the output by log (log pattern), and each line in the log by time.
+
+	// Sort hostnames.
+	sortedHosts := []string{}
+	for k := range hostToLogToLines {
+		sortedHosts = append(sortedHosts, k)
 	}
-	sort.Strings(logKeys)
+	sort.Strings(sortedHosts)
 
-	// Show each log's lines.
-	for _, logKey := range logKeys {
-		// Sort lines by time. This is because we've gathered them from logs in
-		// order of their file names which is not representative of the actual
-		// log entry time.
-		sort.Sort(ByTime(logToLines[logKey]))
+	for _, host := range sortedHosts {
+		// Sort log patterns.
+		sortedLogs := []string{}
+		for k := range hostToLogToLines[host] {
+			sortedLogs = append(sortedLogs, k)
+		}
+		sort.Strings(sortedLogs)
 
-		for _, line := range logToLines[logKey] {
-			log.Printf("%s: %s: %s", line.Hostname, line.Log, line.Line)
+		// Output each log's lines.
+		for _, logPattern := range sortedLogs {
+			// Sort lines by time. We've gathered the lines in order of their file
+			// names which is not representative of the actual log entry time.
+			sort.Sort(ByTime(hostToLogToLines[host][logPattern]))
+
+			for _, line := range hostToLogToLines[host][logPattern] {
+				log.Printf("%s: %s: %s", line.Hostname, line.Log, line.Line)
+			}
 		}
 	}
 
