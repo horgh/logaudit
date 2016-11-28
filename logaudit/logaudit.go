@@ -38,6 +38,10 @@ type Args struct {
 	// file as a way to base when to filter logs starting from.
 	StateFile string
 
+	// StartTime tells us when to retrieve logs starting from. Usually this will
+	// come from the statefile, but it can be useful to manually provide it.
+	StartTime string
+
 	// ShowIgnoredOnly is a flag to do the inverse of usual operations. I figure
 	// it may be useful to see what the program excludes for some double checking.
 	ShowIgnoredOnly bool
@@ -90,14 +94,26 @@ func main() {
 	if err != nil {
 		log.Fatalf("Unable to read state file: %s", err)
 	}
-	log.Printf("Examining logs on or after %s.", lastRunTime)
+	logStartTime := lastRunTime
+
+	if args.StartTime != "" {
+		startTime, err := time.ParseInLocation("2006-01-02 15:04:05", args.StartTime,
+			time.Local)
+		if err != nil {
+			log.Fatalf("Invalid format for start time: %s: %s", args.StartTime, err)
+		}
+
+		logStartTime = startTime
+	}
+
+	log.Printf("Examining logs on or after %s.", logStartTime)
 
 	config, configs, err := parseConfig(args.ConfigFile)
 	if err != nil {
 		log.Fatalf("Unable to parse config: %s", err)
 	}
 
-	err = auditLogs(config, configs, args.ShowIgnoredOnly, lastRunTime,
+	err = auditLogs(config, configs, args.ShowIgnoredOnly, logStartTime,
 		args.Verbose)
 	if err != nil {
 		log.Fatalf("Failure examining logs: %s", err)
@@ -114,7 +130,9 @@ func getArgs() (Args, error) {
 	verbose := flag.Bool("verbose", false, "Enable verbose output.")
 	config := flag.String("config", "", "Path to the configuration file.")
 	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here. We filter log lines to those after the run time if the file is present when we start.")
-	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines.")
+	startTime := flag.String("start-time", "", "Retrieve log lines starting from this time. Format: YYYY-MM-DD HH:MM:SS. This is optional. If not given, then it will come from the state file.")
+	//location := flag.String("location", "America/Vancuover", "
+	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines only.")
 
 	flag.Parse()
 
@@ -139,6 +157,7 @@ func getArgs() (Args, error) {
 		Verbose:         *verbose,
 		ConfigFile:      *config,
 		StateFile:       *stateFile,
+		StartTime:       *startTime,
 		ShowIgnoredOnly: *showIgnored,
 	}, nil
 }
@@ -173,7 +192,12 @@ func parseConfig(configFile string) (*Config, []LogConfig, error) {
 		return nil, nil, fmt.Errorf("Open: %s: %s", configFile, err)
 	}
 
-	defer fh.Close()
+	defer func() {
+		err := fh.Close()
+		if err != nil {
+			log.Printf("Close failed: %s: %s", configFile, err)
+		}
+	}()
 
 	scanner := bufio.NewScanner(fh)
 
