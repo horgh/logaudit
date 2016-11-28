@@ -676,7 +676,7 @@ func submit(submitURL string, logToLines map[string][]*lib.LogLine,
 		log.Printf("Submission is %d bytes", len(submissionJSON))
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Minute}
 
 	reader := bytes.NewReader(submissionJSON)
 
