@@ -215,7 +215,12 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 		return nil, fmt.Errorf("Open: %s: %s", configFile, err)
 	}
 
-	defer fh.Close()
+	defer func() {
+		err := fh.Close()
+		if err != nil {
+			log.Printf("Close: %s: %s", configFile, err)
+		}
+	}()
 
 	scanner := bufio.NewScanner(fh)
 
@@ -476,7 +481,12 @@ func readFileAsLines(path string) ([]*lib.LogLine, error) {
 		return nil, fmt.Errorf("Open: %s: %s", path, err)
 	}
 
-	defer fh.Close()
+	defer func() {
+		err := fh.Close()
+		if err != nil {
+			log.Printf("Close: %s: %s", path, err)
+		}
+	}()
 
 	var scanner *bufio.Scanner
 	if strings.HasSuffix(path, ".gz") {
@@ -484,7 +494,12 @@ func readFileAsLines(path string) ([]*lib.LogLine, error) {
 		if err != nil {
 			return nil, fmt.Errorf("gzip.NewReader: %s: %s", path, err)
 		}
-		defer gz.Close()
+		defer func() {
+			err := gz.Close()
+			if err != nil {
+				log.Printf("gzip Close: %s: %s", path, err)
+			}
+		}()
 
 		scanner = bufio.NewScanner(gz)
 	} else {
@@ -684,7 +699,12 @@ func submit(submitURL string, logToLines map[string][]*lib.LogLine,
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		err := resp.Body.Close()
+		if err != nil {
+			log.Printf("Response body close: %s", err)
+		}
+	}()
 
 	if resp.StatusCode == 200 {
 		return nil
