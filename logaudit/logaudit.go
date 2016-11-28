@@ -404,6 +404,7 @@ func fetchLines(config *Config,
 	if err != nil {
 		return nil, fmt.Errorf("Unable to get database handle: %s", err)
 	}
+	defer db.Close()
 
 	query := `SELECT hostname, filename, line, time FROM log_line
 	WHERE time >= $1`
