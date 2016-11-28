@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -405,9 +406,9 @@ func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
 		logToLines[logFile] = logLines
 	}
 
-	err := submit(submitURL, logToLines, verbose, lastRunTime)
+	err := submitWithRetries(submitURL, logToLines, verbose, lastRunTime)
 	if err != nil {
-		return fmt.Errorf("Unable to submit logs: %s", err)
+		return fmt.Errorf("Gave up trying to submit logs: %s", err)
 	}
 
 	return nil
@@ -654,6 +655,44 @@ func countCharBlocksInString(s string, c rune) int {
 	}
 
 	return count
+}
+
+// Submit logs to the submission server. Retry a number of times until we
+// hopefully succeed.
+//
+// It is possible that the endpoint is down or overloaded. We want to retry to
+// work around transient failures.
+func submitWithRetries(submitURL string, logToLines map[string][]*lib.LogLine,
+	verbose bool, lastRunTime time.Time) error {
+	// Retry this many times (max).
+	retries := 5
+	// Delay at most this many seconds before next retry.
+	maxDelaySeconds := 60 * 5
+
+	for i := 0; i < retries; i++ {
+		err := submit(submitURL, logToLines, verbose, lastRunTime)
+		if err != nil {
+			log.Printf("Failed to submit logs (attempt #%d): %s", i+1, err)
+
+			// [1, maxDelaySeconds]
+			delaySeconds := rand.Intn(maxDelaySeconds) + 1
+
+			durationStr := fmt.Sprintf("%ds", delaySeconds)
+			duration, err := time.ParseDuration(durationStr)
+			if err != nil {
+				return fmt.Errorf("Unable to parse duration: %s", durationStr)
+			}
+
+			log.Printf("Sleeping for %s before next attempt", duration)
+			time.Sleep(duration)
+
+			continue
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("Tried %d times to submit logs. All failed.", retries)
 }
 
 // submit sends the logs to the submission server.
