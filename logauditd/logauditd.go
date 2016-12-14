@@ -106,14 +106,14 @@ func getArgs() (Args, error) {
 
 	if len(*config) == 0 {
 		flag.PrintDefaults()
-		return Args{}, fmt.Errorf("You must provide a config file.")
+		return Args{}, fmt.Errorf("you must provide a config file")
 	}
 	fi, err := os.Stat(*config)
 	if err != nil {
-		return Args{}, fmt.Errorf("Invalid config file: %s", err)
+		return Args{}, fmt.Errorf("invalid config file: %s", err)
 	}
 	if !fi.Mode().IsRegular() {
-		return Args{}, fmt.Errorf("Invalid config file: %s: Not a regular file.",
+		return Args{}, fmt.Errorf("invalid config file: %s: Not a regular file",
 			*config)
 	}
 
@@ -129,10 +129,15 @@ func getArgs() (Args, error) {
 func parseConfig(configFile string) (Config, error) {
 	fh, err := os.Open(configFile)
 	if err != nil {
-		return Config{}, fmt.Errorf("Open: %s: %s", configFile, err)
+		return Config{}, fmt.Errorf("open: %s: %s", configFile, err)
 	}
 
-	defer fh.Close()
+	defer func() {
+		err := fh.Close()
+		if err != nil {
+			log.Printf("close: %s: %s", configFile, err)
+		}
+	}()
 
 	scanner := bufio.NewScanner(fh)
 
@@ -147,7 +152,7 @@ func parseConfig(configFile string) (Config, error) {
 		re := regexp.MustCompile("^(\\S+): (.+)")
 		matches := re.FindStringSubmatch(text)
 		if matches == nil {
-			return Config{}, fmt.Errorf("Invalid config line: %s", text)
+			return Config{}, fmt.Errorf("invalid config line: %s", text)
 		}
 
 		key := matches[1]
@@ -161,7 +166,7 @@ func parseConfig(configFile string) (Config, error) {
 		if key == "listen-port" {
 			port, err := strconv.Atoi(value)
 			if err != nil {
-				return Config{}, fmt.Errorf("Invalid port: %s: %s", text, err)
+				return Config{}, fmt.Errorf("invalid port: %s: %s", text, err)
 			}
 			config.ListenPort = port
 			continue
@@ -175,7 +180,7 @@ func parseConfig(configFile string) (Config, error) {
 		if key == "db-port" {
 			port, err := strconv.Atoi(value)
 			if err != nil {
-				return Config{}, fmt.Errorf("Invalid port: %s: %s", text, err)
+				return Config{}, fmt.Errorf("invalid port: %s: %s", text, err)
 			}
 			config.DBPort = port
 			continue
@@ -199,7 +204,7 @@ func parseConfig(configFile string) (Config, error) {
 
 	err = scanner.Err()
 	if err != nil {
-		return Config{}, fmt.Errorf("Scanner: %s", err)
+		return Config{}, fmt.Errorf("scanner: %s", err)
 	}
 
 	if len(config.ListenHost) == 0 ||
@@ -209,7 +214,7 @@ func parseConfig(configFile string) (Config, error) {
 		len(config.DBName) == 0 ||
 		config.DBPort == 0 ||
 		config.ListenPort == 0 {
-		return Config{}, fmt.Errorf("Missing configuration key")
+		return Config{}, fmt.Errorf("missing configuration key")
 	}
 
 	return config, nil
@@ -307,7 +312,7 @@ func filterLines(db *sql.DB, hostname string, lines []*lib.LogLine,
 
 	rows, err := db.Query(query, hostname, earliestLogTime)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to query: %s", err)
+		return nil, fmt.Errorf("unable to query: %s", err)
 	}
 
 	// Make line info a key in the map for fast lookup to see if the line is
@@ -322,7 +327,7 @@ func filterLines(db *sql.DB, hostname string, lines []*lib.LogLine,
 		err := rows.Scan(&filename, &line, &time)
 		if err != nil {
 			_ = rows.Close()
-			return nil, fmt.Errorf("Unable to scan row: %s", err)
+			return nil, fmt.Errorf("unable to scan row: %s", err)
 		}
 
 		key := fmt.Sprintf("%s:%s:%s", filename, line, time)
@@ -331,7 +336,7 @@ func filterLines(db *sql.DB, hostname string, lines []*lib.LogLine,
 
 	err = rows.Err()
 	if err != nil {
-		return nil, fmt.Errorf("Problem selecting from database: %s", err)
+		return nil, fmt.Errorf("problem selecting from database: %s", err)
 	}
 
 	newLines := []*lib.LogLine{}
@@ -355,14 +360,14 @@ func insertLines(db *sql.DB, hostname string, lines []*lib.LogLine) error {
 	// We must have a transaction for COPY FROM.
 	txn, err := db.Begin()
 	if err != nil {
-		return fmt.Errorf("Unable to start transaction: %s", err)
+		return fmt.Errorf("unable to start transaction: %s", err)
 	}
 
 	stmt, err := txn.Prepare(pq.CopyIn("log_line", "hostname", "filename", "line",
 		"time"))
 	if err != nil {
 		_ = txn.Rollback()
-		return fmt.Errorf("Unable to prepare statement: %s", err)
+		return fmt.Errorf("unable to prepare statement: %s", err)
 	}
 
 	for _, line := range lines {
@@ -370,7 +375,7 @@ func insertLines(db *sql.DB, hostname string, lines []*lib.LogLine) error {
 		if err != nil {
 			_ = stmt.Close()
 			_ = txn.Rollback()
-			return fmt.Errorf("Unable to insert line: %s", err)
+			return fmt.Errorf("unable to insert line: %s", err)
 		}
 	}
 
@@ -379,18 +384,18 @@ func insertLines(db *sql.DB, hostname string, lines []*lib.LogLine) error {
 	if err != nil {
 		_ = stmt.Close()
 		_ = txn.Rollback()
-		return fmt.Errorf("Unable flush data from COPY: %s", err)
+		return fmt.Errorf("unable flush data from COPY: %s", err)
 	}
 
 	err = stmt.Close()
 	if err != nil {
 		_ = txn.Rollback()
-		return fmt.Errorf("Unable to close statement: %s", err)
+		return fmt.Errorf("unable to close statement: %s", err)
 	}
 
 	err = txn.Commit()
 	if err != nil {
-		return fmt.Errorf("Unable to commit transaction: %s", err)
+		return fmt.Errorf("unable to commit transaction: %s", err)
 	}
 
 	return nil

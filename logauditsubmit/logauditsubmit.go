@@ -144,31 +144,31 @@ func getArgs() (Args, error) {
 
 	if len(*config) == 0 {
 		flag.PrintDefaults()
-		return Args{}, fmt.Errorf("You must provide a config file.")
+		return Args{}, fmt.Errorf("you must provide a config file")
 	}
 	fi, err := os.Stat(*config)
 	if err != nil {
-		return Args{}, fmt.Errorf("Invalid config file: %s", err)
+		return Args{}, fmt.Errorf("invalid config file: %s", err)
 	}
 	if !fi.Mode().IsRegular() {
-		return Args{}, fmt.Errorf("Invalid config file: %s: Not a regular file.",
+		return Args{}, fmt.Errorf("nvalid config file: %s: not a regular file",
 			*config)
 	}
 
 	if len(*stateFile) == 0 {
-		return Args{}, fmt.Errorf("You must provide a state file.")
+		return Args{}, fmt.Errorf("you must provide a state file")
 	}
 
 	if len(*locationString) == 0 {
-		return Args{}, fmt.Errorf("Please provide a time zone location.")
+		return Args{}, fmt.Errorf("please provide a time zone location")
 	}
 	location, err := time.LoadLocation(*locationString)
 	if err != nil {
-		return Args{}, fmt.Errorf("Invalid location: %s", err)
+		return Args{}, fmt.Errorf("invalid location: %s", err)
 	}
 
 	if len(*submitURL) == 0 {
-		return Args{}, fmt.Errorf("You must provide a log submit URL.")
+		return Args{}, fmt.Errorf("you must provide a log submit URL")
 	}
 
 	return Args{
@@ -213,7 +213,7 @@ func getArgs() (Args, error) {
 func parseConfig(configFile string) ([]LogConfig, error) {
 	fh, err := os.Open(configFile)
 	if err != nil {
-		return nil, fmt.Errorf("Open: %s: %s", configFile, err)
+		return nil, fmt.Errorf("open: %s: %s", configFile, err)
 	}
 
 	defer func() {
@@ -252,7 +252,7 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 		matches = fullyIgnoreRe.FindStringSubmatch(text)
 		if matches != nil {
 			if config.FilenamePattern == "" {
-				return nil, fmt.Errorf("You must set FilenamePattern to start a config block.")
+				return nil, fmt.Errorf("you must set FilenamePattern to start a config block")
 			}
 			config.FullyIgnore = matches[1] == "y"
 			continue
@@ -262,7 +262,7 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 		matches = timeLayoutRe.FindStringSubmatch(text)
 		if matches != nil {
 			if config.FilenamePattern == "" {
-				return nil, fmt.Errorf("You must set FilenamePattern to start a config block.")
+				return nil, fmt.Errorf("you must set FilenamePattern to start a config block")
 			}
 			config.TimeLayout = matches[1]
 			continue
@@ -272,7 +272,7 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 		matches = strategyRe.FindStringSubmatch(text)
 		if matches != nil {
 			if config.FilenamePattern == "" {
-				return nil, fmt.Errorf("You must set FilenamePattern to start a config block.")
+				return nil, fmt.Errorf("you must set FilenamePattern to start a config block")
 			}
 			if matches[1] == "every-line" {
 				config.TimestampStrategy = EveryLine
@@ -281,12 +281,12 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 			} else if matches[1] == "last-line-or-stat" {
 				config.TimestampStrategy = LastLineOrStat
 			} else {
-				return nil, fmt.Errorf("Invalid timestamp strategy: %s", matches[1])
+				return nil, fmt.Errorf("invalid timestamp strategy: %s", matches[1])
 			}
 			continue
 		}
 
-		return nil, fmt.Errorf("Unexpected line: %s", text)
+		return nil, fmt.Errorf("unexpected line: %s", text)
 	}
 
 	// Ensure we store the last config block we were reading.
@@ -296,7 +296,7 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 
 	err = scanner.Err()
 	if err != nil {
-		return nil, fmt.Errorf("Scanner: %s", err)
+		return nil, fmt.Errorf("scanner: %s", err)
 	}
 
 	return configs, nil
@@ -306,7 +306,7 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 func findLogFiles(root string) ([]string, error) {
 	fh, err := os.Open(root)
 	if err != nil {
-		return nil, fmt.Errorf("Open: %s: %s", root, err)
+		return nil, fmt.Errorf("open: %s: %s", root, err)
 	}
 
 	// I don't defer close here. I'm recursively descending and want to close
@@ -315,23 +315,23 @@ func findLogFiles(root string) ([]string, error) {
 	fi, err := fh.Stat()
 	if err != nil {
 		_ = fh.Close()
-		return nil, fmt.Errorf("Stat: %s: %s", root, err)
+		return nil, fmt.Errorf("stat: %s: %s", root, err)
 	}
 
 	if !fi.IsDir() {
 		_ = fh.Close()
-		return nil, fmt.Errorf("Root is not a directory: %s", root)
+		return nil, fmt.Errorf("root is not a directory: %s", root)
 	}
 
 	files, err := fh.Readdirnames(0)
 	if err != nil {
 		_ = fh.Close()
-		return nil, fmt.Errorf("Readdirnames: %s: %s", root, err)
+		return nil, fmt.Errorf("readdirnames: %s: %s", root, err)
 	}
 
 	err = fh.Close()
 	if err != nil {
-		return nil, fmt.Errorf("fh.Close: %s", err)
+		return nil, fmt.Errorf("close: %s", err)
 	}
 
 	// Check each file in the directory.
@@ -344,7 +344,7 @@ func findLogFiles(root string) ([]string, error) {
 
 		fi2, err := os.Stat(path)
 		if err != nil {
-			return nil, fmt.Errorf("Stat: %s: %s", path, err)
+			return nil, fmt.Errorf("stat: %s: %s", path, err)
 		}
 
 		if fi2.Mode().IsDir() {
@@ -358,7 +358,7 @@ func findLogFiles(root string) ([]string, error) {
 		}
 
 		if !fi2.Mode().IsRegular() {
-			return nil, fmt.Errorf("Not a regular file: %s", path)
+			return nil, fmt.Errorf("not a regular file: %s", path)
 		}
 
 		logFiles = append(logFiles, path)
@@ -387,7 +387,7 @@ func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
 	for _, logFile := range logFiles {
 		config, match, err := getConfigForLogFile(logFile, logConfigs)
 		if err != nil {
-			return fmt.Errorf("Unable to determine config for log file: %s: %s",
+			return fmt.Errorf("unable to determine config for log file: %s: %s",
 				logFile, err)
 		}
 		if !match {
@@ -401,14 +401,14 @@ func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
 
 		logLines, err := readLog(logFile, config, location, lastRunTime)
 		if err != nil {
-			return fmt.Errorf("Unable to read log: %s: %s", logFile, err)
+			return fmt.Errorf("unable to read log: %s: %s", logFile, err)
 		}
 		logToLines[logFile] = logLines
 	}
 
 	err := submitWithRetries(submitURL, logToLines, verbose, lastRunTime)
 	if err != nil {
-		return fmt.Errorf("Gave up trying to submit logs: %s", err)
+		return fmt.Errorf("gave up trying to submit logs: %s", err)
 	}
 
 	return nil
@@ -443,7 +443,7 @@ func readLog(file string, config LogConfig, location *time.Location,
 	// Skip it if its modified time is before our start time.
 	fi, err := os.Stat(file)
 	if err != nil {
-		return nil, fmt.Errorf("Stat: %s: %s", file, err)
+		return nil, fmt.Errorf("stat: %s: %s", file, err)
 	}
 	if fi.ModTime().Before(lastRunTime) {
 		return nil, nil
@@ -479,7 +479,7 @@ func readLog(file string, config LogConfig, location *time.Location,
 func readFileAsLines(path string) ([]*lib.LogLine, error) {
 	fh, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("Open: %s: %s", path, err)
+		return nil, fmt.Errorf("open: %s: %s", path, err)
 	}
 
 	defer func() {
@@ -529,7 +529,7 @@ func readFileAsLines(path string) ([]*lib.LogLine, error) {
 
 	err = scanner.Err()
 	if err != nil {
-		return nil, fmt.Errorf("Scanner: %s", err)
+		return nil, fmt.Errorf("scanner: %s", err)
 	}
 
 	return lines, nil
@@ -549,7 +549,7 @@ func assignTimeToLines(lines []*lib.LogLine, config LogConfig,
 		lineTime, err := parseLineTime(line.Line, location, config.TimeLayout)
 		if err != nil {
 			if config.TimestampStrategy == EveryLine {
-				return fmt.Errorf("Line's time could not be determined: %s: %s",
+				return fmt.Errorf("line's time could not be determined: %s: %s",
 					line, err)
 			}
 
@@ -557,7 +557,7 @@ func assignTimeToLines(lines []*lib.LogLine, config LogConfig,
 				// We've not yet seen any timestamp. We want to apply the timestamp
 				// from the last log line that had one.
 				if lastLineTime == zeroTime {
-					return fmt.Errorf("Line's time could not be determined: %s: %s",
+					return fmt.Errorf("line's time could not be determined: %s: %s",
 						line, err)
 				}
 				line.Time = lastLineTime
@@ -573,7 +573,7 @@ func assignTimeToLines(lines []*lib.LogLine, config LogConfig,
 				continue
 			}
 
-			return fmt.Errorf("Unexpected timestamp strategy: %d",
+			return fmt.Errorf("unexpected timestamp strategy: %d",
 				config.TimestampStrategy)
 		}
 
@@ -615,7 +615,7 @@ func parseLineTime(line string, location *time.Location,
 
 	lineTime, err := time.ParseInLocation(timeLayout, lineStamp, location)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("Could not parse line's timestamp: %s: %s",
+		return time.Time{}, fmt.Errorf("could not parse line's timestamp: %s: %s",
 			lineStamp, err)
 	}
 
@@ -680,7 +680,7 @@ func submitWithRetries(submitURL string, logToLines map[string][]*lib.LogLine,
 			durationStr := fmt.Sprintf("%ds", delaySeconds)
 			duration, err := time.ParseDuration(durationStr)
 			if err != nil {
-				return fmt.Errorf("Unable to parse duration: %s", durationStr)
+				return fmt.Errorf("unable to parse duration: %s", durationStr)
 			}
 
 			log.Printf("Sleeping for %s before next attempt", duration)
@@ -692,7 +692,7 @@ func submitWithRetries(submitURL string, logToLines map[string][]*lib.LogLine,
 		return nil
 	}
 
-	return fmt.Errorf("Tried %d times to submit logs. All failed.", retries)
+	return fmt.Errorf("tried %d times to submit logs. all failed", retries)
 }
 
 // submit sends the logs to the submission server.
@@ -723,7 +723,7 @@ func submit(submitURL string, logToLines map[string][]*lib.LogLine,
 
 	submissionJSON, err := json.Marshal(submission)
 	if err != nil {
-		return fmt.Errorf("Unable to generate JSON: %s", err)
+		return fmt.Errorf("unable to generate JSON: %s", err)
 	}
 
 	if verbose {
@@ -759,12 +759,12 @@ func getHostname() (string, error) {
 	cmd := exec.Command("hostname", "-f")
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("Unable to run hostname command: %s", err)
+		return "", fmt.Errorf("unable to run hostname command: %s", err)
 	}
 
 	hostname := strings.TrimSpace(string(output))
 	if len(hostname) == 0 {
-		return "", fmt.Errorf("No hostname found")
+		return "", fmt.Errorf("no hostname found")
 	}
 
 	return hostname, nil

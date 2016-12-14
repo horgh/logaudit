@@ -63,7 +63,7 @@ func ReadStateFileTime(path string) (time.Time, error) {
 	_, err := os.Stat(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return time.Time{}, fmt.Errorf("Unable to stat state file: %s", err)
+			return time.Time{}, fmt.Errorf("unable to stat state file: %s", err)
 		}
 
 		return time.Now().Add(-24 * time.Hour), nil
@@ -74,14 +74,19 @@ func ReadStateFileTime(path string) (time.Time, error) {
 		return time.Time{}, err
 	}
 
-	defer fh.Close()
+	defer func() {
+		err := fh.Close()
+		if err != nil {
+			log.Printf("close: %s: %s", path, err)
+		}
+	}()
 
 	scanner := bufio.NewScanner(fh)
 
 	for scanner.Scan() {
 		unixtime, err := strconv.ParseInt(scanner.Text(), 10, 64)
 		if err != nil {
-			return time.Time{}, fmt.Errorf("Malformed time in state file: %s: %s",
+			return time.Time{}, fmt.Errorf("malformed time in state file: %s: %s",
 				scanner.Text(), err)
 		}
 
@@ -90,10 +95,10 @@ func ReadStateFileTime(path string) (time.Time, error) {
 
 	err = scanner.Err()
 	if err != nil {
-		return time.Time{}, fmt.Errorf("Scanner: %s", err)
+		return time.Time{}, fmt.Errorf("scanner: %s", err)
 	}
 
-	return time.Time{}, fmt.Errorf("State file had no content")
+	return time.Time{}, fmt.Errorf("state file had no content")
 }
 
 // WriteStateFile writes the given time to the state file.
@@ -115,12 +120,12 @@ func WriteStateFile(path string, startTime time.Time) error {
 
 	if n != len(unixtime) {
 		_ = fh.Close()
-		return fmt.Errorf("Short write")
+		return fmt.Errorf("short write")
 	}
 
 	err = fh.Close()
 	if err != nil {
-		return fmt.Errorf("Close error: %s", err)
+		return fmt.Errorf("slose error: %s", err)
 	}
 
 	return nil
@@ -133,7 +138,7 @@ func ConnectToDB(host, user, pass, name string, port int) (*sql.DB, error) {
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to connect to database: %s", err)
+		return nil, fmt.Errorf("failed to connect to database: %s", err)
 	}
 
 	return db, nil
@@ -172,7 +177,7 @@ func GetDB(host, user, pass, name string, port int) (*sql.DB, error) {
 
 	db, err := ConnectToDB(host, user, pass, name, port)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to connect to the database: %s", err)
+		return nil, fmt.Errorf("failed to connect to the database: %s", err)
 	}
 
 	DB = db

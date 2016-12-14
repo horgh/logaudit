@@ -54,7 +54,7 @@ func getArgs() (*Args, error) {
 
 	if len(*file) == 0 {
 		flag.PrintDefaults()
-		return nil, fmt.Errorf("You must provide a file.")
+		return nil, fmt.Errorf("you must provide a file")
 	}
 
 	return &Args{
@@ -69,7 +69,12 @@ func readFile(file string) ([]string, error) {
 		return nil, err
 	}
 
-	defer fh.Close()
+	defer func() {
+		err := fh.Close()
+		if err != nil {
+			log.Printf("close: %s: %s", file, err)
+		}
+	}()
 
 	scanner := bufio.NewScanner(fh)
 
@@ -81,7 +86,7 @@ func readFile(file string) ([]string, error) {
 
 	err = scanner.Err()
 	if err != nil {
-		return nil, fmt.Errorf("Scanner: %s", err.Error())
+		return nil, fmt.Errorf("scanner: %s", err.Error())
 	}
 
 	return lines, nil
