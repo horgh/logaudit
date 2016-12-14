@@ -11,6 +11,7 @@ package main
 
 import (
 	"bufio"
+	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -34,20 +35,12 @@ type Args struct {
 	// ConfigFile is the file describing the logs to look at.
 	ConfigFile string
 
-	// StateFile is a file we record our starting runtime in. We can look at this
-	// file as a way to base when to filter logs starting from.
-	StateFile string
-
-	// StartTime tells us when to retrieve logs starting from. Usually this will
-	// come from the statefile, but it can be useful to manually provide it.
-	StartTime string
-
 	// ShowIgnoredOnly is a flag to do the inverse of usual operations. I figure
 	// it may be useful to see what the program excludes for some double checking.
 	ShowIgnoredOnly bool
 }
 
-// Config holds global run time configuration.
+// Config holds run time configuration, except for log file settings.
 type Config struct {
 	DBHost string
 	DBPort int
@@ -73,6 +66,14 @@ type LogConfig struct {
 	IgnorePatterns []*regexp.Regexp
 }
 
+// Host holds information about a host that reports logs.
+type Host struct {
+	Hostname string
+	// AuditedUntil records the last log we saw and audited from this host. It
+	// means we've audited its logs up until this time.
+	AuditedUntil time.Time
+}
+
 // ByTime is provides sorting LogLines by time.
 type ByTime []*lib.LogLine
 
@@ -83,45 +84,19 @@ func (s ByTime) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 func main() {
 	log.SetFlags(0)
 
-	runStartTime := time.Now()
-
 	args, err := getArgs()
 	if err != nil {
 		log.Fatalf("Invalid argument: %s", err)
 	}
-
-	lastRunTime, err := lib.ReadStateFileTime(args.StateFile)
-	if err != nil {
-		log.Fatalf("Unable to read state file: %s", err)
-	}
-	logStartTime := lastRunTime
-
-	if args.StartTime != "" {
-		startTime, err := time.ParseInLocation("2006-01-02 15:04:05", args.StartTime,
-			time.Local)
-		if err != nil {
-			log.Fatalf("Invalid format for start time: %s: %s", args.StartTime, err)
-		}
-
-		logStartTime = startTime
-	}
-
-	log.Printf("Examining logs on or after %s.", logStartTime)
 
 	config, configs, err := parseConfig(args.ConfigFile)
 	if err != nil {
 		log.Fatalf("Unable to parse config: %s", err)
 	}
 
-	err = auditLogs(config, configs, args.ShowIgnoredOnly, logStartTime,
-		args.Verbose)
+	err = auditLogs(config, configs, args.ShowIgnoredOnly, args.Verbose)
 	if err != nil {
 		log.Fatalf("Failure examining logs: %s", err)
-	}
-
-	err = lib.WriteStateFile(args.StateFile, runStartTime)
-	if err != nil {
-		log.Fatalf("Problem writing state file: %s: %s", args.StateFile, err)
 	}
 }
 
@@ -129,35 +104,26 @@ func main() {
 func getArgs() (Args, error) {
 	verbose := flag.Bool("verbose", false, "Enable verbose output.")
 	config := flag.String("config", "", "Path to the configuration file.")
-	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here. We filter log lines to those after the run time if the file is present when we start.")
-	startTime := flag.String("start-time", "", "Retrieve log lines starting from this time. Format: YYYY-MM-DD HH:MM:SS. This is optional. If not given, then it will come from the state file.")
-	//location := flag.String("location", "America/Vancuover", "
 	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines only.")
 
 	flag.Parse()
 
 	if len(*config) == 0 {
 		flag.PrintDefaults()
-		return Args{}, fmt.Errorf("You must provide a config file.")
+		return Args{}, fmt.Errorf("you must provide a config file")
 	}
 	fi, err := os.Stat(*config)
 	if err != nil {
-		return Args{}, fmt.Errorf("Invalid config file: %s", err)
+		return Args{}, fmt.Errorf("invalid config file: %s", err)
 	}
 	if !fi.Mode().IsRegular() {
-		return Args{}, fmt.Errorf("Invalid config file: %s: Not a regular file.",
+		return Args{}, fmt.Errorf("invalid config file: %s: not a regular file",
 			*config)
-	}
-
-	if len(*stateFile) == 0 {
-		return Args{}, fmt.Errorf("You must provide a state file.")
 	}
 
 	return Args{
 		Verbose:         *verbose,
 		ConfigFile:      *config,
-		StateFile:       *stateFile,
-		StartTime:       *startTime,
 		ShowIgnoredOnly: *showIgnored,
 	}, nil
 }
@@ -189,7 +155,7 @@ func getArgs() (Args, error) {
 func parseConfig(configFile string) (*Config, []LogConfig, error) {
 	fh, err := os.Open(configFile)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Open: %s: %s", configFile, err)
+		return nil, nil, fmt.Errorf("open: %s: %s", configFile, err)
 	}
 
 	defer func() {
@@ -226,7 +192,7 @@ func parseConfig(configFile string) (*Config, []LogConfig, error) {
 			if matches[1] == "port" {
 				port, err := strconv.Atoi(matches[2])
 				if err != nil {
-					return nil, nil, fmt.Errorf("Invalid port: %s: %s", matches[2], err)
+					return nil, nil, fmt.Errorf("invalid port: %s: %s", matches[2], err)
 				}
 				config.DBPort = port
 				continue
@@ -244,7 +210,7 @@ func parseConfig(configFile string) (*Config, []LogConfig, error) {
 				continue
 			}
 
-			return nil, nil, fmt.Errorf("Invalid option: %s", text)
+			return nil, nil, fmt.Errorf("invalid option: %s", text)
 		}
 
 		nameRe := regexp.MustCompile("^FilenamePattern: (.+)")
@@ -264,7 +230,7 @@ func parseConfig(configFile string) (*Config, []LogConfig, error) {
 		matches = includeAllRe.FindStringSubmatch(text)
 		if matches != nil {
 			if logConfig.FilenamePattern == "" {
-				return nil, nil, fmt.Errorf("You must set FilenamePattern to start a config block.")
+				return nil, nil, fmt.Errorf("you must set FilenamePattern to start a config block")
 			}
 			logConfig.IncludeAllIgnorePatterns = matches[1] == "y"
 			continue
@@ -274,7 +240,7 @@ func parseConfig(configFile string) (*Config, []LogConfig, error) {
 		matches = patternRe.FindStringSubmatch(text)
 		if matches != nil {
 			if logConfig.FilenamePattern == "" {
-				return nil, nil, fmt.Errorf("You must set FilenamePattern to start a config block.")
+				return nil, nil, fmt.Errorf("you must set FilenamePattern to start a config block")
 			}
 
 			file, ok := ignoreToFile[matches[1]]
@@ -290,7 +256,7 @@ func parseConfig(configFile string) (*Config, []LogConfig, error) {
 			continue
 		}
 
-		return nil, nil, fmt.Errorf("Unexpected line: %s", text)
+		return nil, nil, fmt.Errorf("unexpected line: %s", text)
 	}
 
 	// Ensure we store the last config block we were reading.
@@ -300,7 +266,7 @@ func parseConfig(configFile string) (*Config, []LogConfig, error) {
 
 	err = scanner.Err()
 	if err != nil {
-		return nil, nil, fmt.Errorf("Scanner: %s", err)
+		return nil, nil, fmt.Errorf("scanner: %s", err)
 	}
 
 	return &config, configs, nil
@@ -310,108 +276,253 @@ func parseConfig(configFile string) (*Config, []LogConfig, error) {
 //
 // It matches up the log file for each line, and then applies filters based on
 // what log it is.
-func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly bool,
-	filterStartTime time.Time, verbose bool) error {
-
-	// Gather all ignore patterns in one slice - we use them all at once sometimes
-	// and this is handy.
-	var ignorePatterns []*regexp.Regexp
-	for _, logConfig := range configs {
-		ignorePatterns = append(ignorePatterns, logConfig.IgnorePatterns...)
-	}
-
-	// Fetch log lines from the database.
-	lines, err := fetchLines(config, filterStartTime)
+//
+// It outputs lines that pass the filters.
+//
+// It records the time of the most recent log for each host.
+func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly,
+	verbose bool) error {
+	db, err := lib.GetDB(config.DBHost, config.DBUser, config.DBPass,
+		config.DBName, config.DBPort)
 	if err != nil {
-		return fmt.Errorf("Unable to fetch lines from database: %s", err)
+		return fmt.Errorf("unable to connect to database: %s", err)
 	}
 
-	hostToLogToLines := make(map[string]map[string][]*lib.LogLine)
-
-	for _, line := range lines {
-		config, match, err := getConfigForLogFile(lib.LogDir, line.Log, configs)
+	defer func() {
+		err := db.Close()
 		if err != nil {
-			return fmt.Errorf("Unable to look up log config: %s", err)
+			log.Printf("error closing the database connection: %s", err)
 		}
-		if !match {
-			log.Printf("No config found for log: %s", line.Log)
-			continue
-		}
+	}()
 
-		keep := filterLine(config, ignorePatterns, line.Line, showIgnoredOnly,
-			verbose)
-		if !keep {
-			continue
-		}
+	// Find the hosts that have sent lines, and the time of the log we most
+	// recently saw. I track per host as, for example, a host might miss its
+	// submission window, and we want to pick up where we left off for that host.
+	// This is as opposed to having a single time cut off each run which could
+	// lead to us missing logs for host(s) that didn't submit for some reason
+	// before our last audit run.
 
-		// Store it in our map.
-
-		_, exists := hostToLogToLines[line.Hostname]
-		if !exists {
-			hostToLogToLines[line.Hostname] = make(map[string][]*lib.LogLine)
-		}
-
-		_, exists = hostToLogToLines[line.Hostname][config.FilenamePattern]
-		if !exists {
-			hostToLogToLines[line.Hostname][config.FilenamePattern] = []*lib.LogLine{}
-		}
-
-		hostToLogToLines[line.Hostname][config.FilenamePattern] = append(
-			hostToLogToLines[line.Hostname][config.FilenamePattern], line)
+	fetchStartTime := time.Now()
+	if verbose {
+		log.Printf("Fetching hosts...")
 	}
 
-	// Output. We show all logs for one host before showing any for the next. We
-	// order the output by log (log pattern), and each line in the log by time.
-
-	// Sort hostnames.
-	sortedHosts := []string{}
-	for k := range hostToLogToLines {
-		sortedHosts = append(sortedHosts, k)
+	hosts, err := dbGetHosts(db)
+	if err != nil {
+		return fmt.Errorf("unable to retrieve hosts: %s", err)
 	}
-	sort.Strings(sortedHosts)
 
-	for _, host := range sortedHosts {
-		// Sort log patterns.
-		sortedLogs := []string{}
-		for k := range hostToLogToLines[host] {
-			sortedLogs = append(sortedLogs, k)
-		}
-		sort.Strings(sortedLogs)
+	if verbose {
+		log.Printf("Fetched %d hosts in %s", len(hosts),
+			time.Now().Sub(fetchStartTime))
+	}
 
-		// Output each log's lines.
-		for _, logPattern := range sortedLogs {
-			// Sort lines by time. We've gathered the lines in order of their file
-			// names which is not representative of the actual log entry time.
-			sort.Sort(ByTime(hostToLogToLines[host][logPattern]))
+	hostToLogToLines, hostToTime, err := fetchAndFilterLines(configs, db, hosts,
+		showIgnoredOnly, verbose)
+	if err != nil {
+		return fmt.Errorf("unable to fetch/filter lines: %s", err)
+	}
 
-			for _, line := range hostToLogToLines[host][logPattern] {
-				log.Printf("%s: %s: %s", line.Hostname, line.Log, line.Line)
-			}
-		}
+	outputLines(hostToLogToLines)
+
+	err = recordHostLogTimes(db, hosts, hostToTime)
+	if err != nil {
+		return fmt.Errorf("unable to record log times for hosts: %s", err)
 	}
 
 	return nil
 }
 
-// fetchLines retrieves log lines from the database.
+// Retrieve all hosts and the last time we saw a log line from it.
+func dbGetHosts(db *sql.DB) ([]Host, error) {
+	// A host exists if it ever sent us log lines. We discover hosts this way as
+	// this allows us to avoid a registration phase where a host would have to get
+	// into the host table somehow.
+
+	query := `SELECT DISTINCT hostname FROM log_line`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query: %s", err)
+	}
+
+	hostnames := []string{}
+
+	for rows.Next() {
+		hostname := ""
+
+		err := rows.Scan(&hostname)
+		if err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("unable to scan row: %s", err)
+		}
+
+		hostnames = append(hostnames, hostname)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("problem selecting from database: %s", err)
+	}
+
+	// For each host we found, see up until what time we've audited it (if any).
+
+	query = `SELECT hostname, audited_until FROM host`
+
+	rows, err = db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query: %s", err)
+	}
+
+	hostToTime := map[string]time.Time{}
+
+	for rows.Next() {
+		hostname := ""
+		t := time.Time{}
+
+		err := rows.Scan(&hostname, &t)
+		if err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("unable to scan row: %s", err)
+		}
+
+		hostToTime[hostname] = t
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("problem selecting from database: %s", err)
+	}
+
+	// Combine what we found into one list of Hosts.
+
+	hosts := []Host{}
+
+	for _, hostname := range hostnames {
+		t, ok := hostToTime[hostname]
+		if !ok {
+			// Default to 48 hours back if we've never audited this host yet.
+			t = time.Now().Add(-48 * time.Hour)
+		}
+
+		hosts = append(hosts, Host{
+			Hostname:     hostname,
+			AuditedUntil: t,
+		})
+	}
+
+	return hosts, nil
+}
+
+// Retrieve and filter log lines for all hosts.
+//
+// We return the lines in a map of the form:
+// map: host ->
+//    map: log file -> []log line
+//
+// We also return the timestamp of the most recent log line we see for each
+// host. This is in a map keyed by hostname. This needs to be inside this
+// function as we want to know the newest line we see, filtered out or not.
+func fetchAndFilterLines(configs []LogConfig, db *sql.DB, hosts []Host,
+	showIgnoredOnly, verbose bool) (map[string]map[string][]*lib.LogLine,
+	map[string]time.Time, error) {
+	// Gather all ignore patterns in one slice. Certain log files apply all
+	// patterns at once.
+	var ignorePatterns []*regexp.Regexp
+	for _, config := range configs {
+		ignorePatterns = append(ignorePatterns, config.IgnorePatterns...)
+	}
+
+	// Fetch logs for each host.
+
+	hostToLogToLines := make(map[string]map[string][]*lib.LogLine)
+	hostToNewest := make(map[string]time.Time)
+
+	for _, host := range hosts {
+		// Fetch lines after the most recent time we saw last time we ran (for this
+		// host). But give some buffer around last log line we saw.
+		filterStartTime := host.AuditedUntil.Add(-time.Hour)
+
+		fetchStartTime := time.Now()
+		if verbose {
+			log.Printf("Fetching logs for host %s (start: %s)...", host.Hostname,
+				filterStartTime)
+		}
+
+		lines, err := dbFetchLines(db, host.Hostname, filterStartTime)
+		if err != nil {
+			return nil, nil, fmt.Errorf("unable to fetch lines from database: %s",
+				err)
+		}
+
+		if verbose {
+			log.Printf("Fetched logs for host %s in %s", host.Hostname,
+				time.Now().Sub(fetchStartTime))
+		}
+
+		// Track the most recent line time we see for this host.
+		hostToNewest[host.Hostname] = time.Time{}
+
+		// Look at each line. Determine if it's the newest time we've seen, and then
+		// filter it for whether we will want to report it.
+
+		for _, line := range lines {
+			if line.Time.After(hostToNewest[host.Hostname]) {
+				hostToNewest[host.Hostname] = line.Time
+			}
+
+			config, match, err := getConfigForLogFile(lib.LogDir, line.Log, configs)
+			if err != nil {
+				return nil, nil, fmt.Errorf("unable to look up log config: %s", err)
+			}
+
+			if !match {
+				log.Printf("no config found for log: %s", line.Log)
+				continue
+			}
+
+			keep := filterLine(config, ignorePatterns, line.Line, showIgnoredOnly,
+				verbose)
+			if !keep {
+				continue
+			}
+
+			// Store the line for later reporting.
+
+			_, exists := hostToLogToLines[line.Hostname]
+			if !exists {
+				hostToLogToLines[line.Hostname] = make(map[string][]*lib.LogLine)
+			}
+
+			_, exists = hostToLogToLines[line.Hostname][config.FilenamePattern]
+			if !exists {
+				hostToLogToLines[line.Hostname][config.FilenamePattern] =
+					[]*lib.LogLine{}
+			}
+
+			hostToLogToLines[line.Hostname][config.FilenamePattern] = append(
+				hostToLogToLines[line.Hostname][config.FilenamePattern], line)
+		}
+	}
+
+	return hostToLogToLines, hostToNewest, nil
+}
+
+// Retrieve log lines for the host from the database.
 //
 // We retrieve only lines on or after the filter start time.
-func fetchLines(config *Config,
+func dbFetchLines(db *sql.DB, hostname string,
 	filterStartTime time.Time) ([]*lib.LogLine, error) {
+	query := `
+	SELECT hostname, filename, line, time
+	FROM log_line
+	WHERE time >= $1 AND hostname = $2
+	`
 
-	db, err := lib.GetDB(config.DBHost, config.DBUser, config.DBPass,
-		config.DBName, config.DBPort)
+	rows, err := db.Query(query, filterStartTime, hostname)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to get database handle: %s", err)
-	}
-	defer db.Close()
-
-	query := `SELECT hostname, filename, line, time FROM log_line
-	WHERE time >= $1`
-
-	rows, err := db.Query(query, filterStartTime)
-	if err != nil {
-		return nil, fmt.Errorf("Unable to query: %s", err)
+		return nil, fmt.Errorf("unable to query for host's lines: %s: %s", hostname,
+			err)
 	}
 
 	lines := []*lib.LogLine{}
@@ -420,25 +531,26 @@ func fetchLines(config *Config,
 		hostname := ""
 		filename := ""
 		line := ""
-		time := time.Time{}
 
-		err := rows.Scan(&hostname, &filename, &line, &time)
+		t := time.Time{}
+
+		err := rows.Scan(&hostname, &filename, &line, &t)
 		if err != nil {
 			_ = rows.Close()
-			return nil, fmt.Errorf("Unable to scan row: %s", err)
+			return nil, fmt.Errorf("unable to scan row: %s", err)
 		}
 
 		lines = append(lines, &lib.LogLine{
 			Hostname: hostname,
 			Log:      filename,
 			Line:     line,
-			Time:     time,
+			Time:     t,
 		})
 	}
 
 	err = rows.Err()
 	if err != nil {
-		return nil, fmt.Errorf("Problem selecting from database: %s", err)
+		return nil, fmt.Errorf("problem selecting from database: %s", err)
 	}
 
 	return lines, nil
@@ -452,7 +564,7 @@ func getConfigForLogFile(root, file string,
 	for _, config := range configs {
 		match, err := lib.FileMatch(root, file, config.FilenamePattern)
 		if err != nil {
-			return LogConfig{}, false, fmt.Errorf("fileMatch: %s: %s", file, err)
+			return LogConfig{}, false, fmt.Errorf("matching file: %s: %s", file, err)
 		}
 
 		if match {
@@ -489,4 +601,87 @@ func filterLine(config LogConfig, allIgnorePatterns []*regexp.Regexp,
 	}
 
 	return true
+}
+
+// Output the lines we retrieved.
+//
+// We output each one host's lines before going on to the next host.
+//
+// Each host's lines we sort first by the log file, and then by log line's
+// time in that file.
+//
+// We output one log file for a host before going on to the next host.
+func outputLines(hostToLogToLines map[string]map[string][]*lib.LogLine) {
+	// Sort hostnames.
+
+	sortedHosts := []string{}
+	for k := range hostToLogToLines {
+		sortedHosts = append(sortedHosts, k)
+	}
+	sort.Strings(sortedHosts)
+
+	// Output logs for each host.
+
+	for _, host := range sortedHosts {
+		// Sort log filenames (well, filename patterns).
+
+		sortedLogs := []string{}
+		for k := range hostToLogToLines[host] {
+			sortedLogs = append(sortedLogs, k)
+		}
+		sort.Strings(sortedLogs)
+
+		// Output each log's lines.
+
+		for _, logPattern := range sortedLogs {
+			// Sort lines by time. We've gathered the lines in order of their file
+			// names which is not representative of the actual log entry time.
+			sort.Sort(ByTime(hostToLogToLines[host][logPattern]))
+
+			for _, line := range hostToLogToLines[host][logPattern] {
+				log.Printf("%s: %s: %s", line.Hostname, line.Log, line.Line)
+			}
+		}
+	}
+}
+
+// Record the newest time for a log line we saw from each host. Update this in
+// the database only if we have a newer log line than we saw last time.
+func recordHostLogTimes(db *sql.DB, hosts []Host,
+	hostToTime map[string]time.Time) error {
+	// We may see logs for hosts that we never saw before. These will have shown
+	// up in our host list but not yet be in our host table.
+
+	// It's possible we did not see any new lines this run for a host. Don't set
+	// the time in the host table to one earlier than is already there.
+
+	for _, host := range hosts {
+		newestTime := hostToTime[host.Hostname]
+
+		// If the newest time is the same or before the last time we recorded, then
+		// there's nothing to do either. This should not happen, but check just in
+		// case.
+		if newestTime.Before(host.AuditedUntil) ||
+			newestTime.Equal(host.AuditedUntil) {
+			continue
+		}
+
+		// We need to record the host was audited up until this time. Take care
+		// because there may not be a record in the host table for the host.
+
+		// UPSERT.
+		query := `
+		INSERT INTO host (hostname, audited_until) VALUES($1, $2)
+		ON CONFLICT (hostname)
+		DO UPDATE SET audited_until = EXCLUDED.audited_until
+		`
+
+		_, err := db.Exec(query, host.Hostname, newestTime)
+		if err != nil {
+			return fmt.Errorf("unable to store host audited time: %s: %s",
+				host.Hostname, err)
+		}
+	}
+
+	return nil
 }
