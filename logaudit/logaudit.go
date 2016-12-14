@@ -38,6 +38,9 @@ type Args struct {
 	// ShowIgnoredOnly is a flag to do the inverse of usual operations. I figure
 	// it may be useful to see what the program excludes for some double checking.
 	ShowIgnoredOnly bool
+
+	// CheckConfig parses the config file and reports any issues. Then we exit.
+	CheckConfig bool
 }
 
 // Config holds run time configuration, except for log file settings.
@@ -89,9 +92,13 @@ func main() {
 		log.Fatalf("Invalid argument: %s", err)
 	}
 
-	config, configs, err := parseConfig(args.ConfigFile)
+	config, configs, err := parseConfig(args.ConfigFile, args.CheckConfig)
 	if err != nil {
 		log.Fatalf("Unable to parse config: %s", err)
+	}
+
+	if args.CheckConfig {
+		return
 	}
 
 	err = auditLogs(config, configs, args.ShowIgnoredOnly, args.Verbose)
@@ -105,6 +112,7 @@ func getArgs() (Args, error) {
 	verbose := flag.Bool("verbose", false, "Enable verbose output.")
 	config := flag.String("config", "", "Path to the configuration file.")
 	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines only.")
+	checkConfig := flag.Bool("check-config", false, "Check the config for issues and then exit.")
 
 	flag.Parse()
 
@@ -125,6 +133,7 @@ func getArgs() (Args, error) {
 		Verbose:         *verbose,
 		ConfigFile:      *config,
 		ShowIgnoredOnly: *showIgnored,
+		CheckConfig:     *checkConfig,
 	}, nil
 }
 
@@ -152,7 +161,8 @@ func getArgs() (Args, error) {
 //   DBName
 //
 // We ignore blank lines and # comments.
-func parseConfig(configFile string) (*Config, []LogConfig, error) {
+func parseConfig(configFile string, checkConfig bool) (*Config, []LogConfig,
+	error) {
 	fh, err := os.Open(configFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open: %s: %s", configFile, err)
@@ -245,8 +255,10 @@ func parseConfig(configFile string) (*Config, []LogConfig, error) {
 
 			file, ok := ignoreToFile[matches[1]]
 			if ok {
-				log.Printf("Warning: Ignore pattern %s in file %s and %s (line %d)",
-					matches[1], file, logConfig.FilenamePattern, lineNum)
+				if checkConfig {
+					log.Printf("Warning: Ignore pattern %s in file %s and %s (line %d)",
+						matches[1], file, logConfig.FilenamePattern, lineNum)
+				}
 			} else {
 				ignoreToFile[matches[1]] = logConfig.FilenamePattern
 			}
