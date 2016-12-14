@@ -4,13 +4,11 @@
 package lib
 
 import (
-	"bufio"
 	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -52,84 +50,6 @@ var DB *sql.DB
 // DBLock helps us avoid race conditions associated with the database. Such as
 // connecting to it (assigning the global).
 var DBLock sync.Mutex
-
-// ReadStateFileTime reads a state file.
-//
-// The file should contain a single value, a unixtime. Parse it and return.
-//
-// If the file does not exist, return 24 hours ago. It is okay for it not to
-// exist as this could be the first run.
-func ReadStateFileTime(path string) (time.Time, error) {
-	_, err := os.Stat(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return time.Time{}, fmt.Errorf("unable to stat state file: %s", err)
-		}
-
-		return time.Now().Add(-24 * time.Hour), nil
-	}
-
-	fh, err := os.Open(path)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	defer func() {
-		err := fh.Close()
-		if err != nil {
-			log.Printf("close: %s: %s", path, err)
-		}
-	}()
-
-	scanner := bufio.NewScanner(fh)
-
-	for scanner.Scan() {
-		unixtime, err := strconv.ParseInt(scanner.Text(), 10, 64)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("malformed time in state file: %s: %s",
-				scanner.Text(), err)
-		}
-
-		return time.Unix(unixtime, 0), nil
-	}
-
-	err = scanner.Err()
-	if err != nil {
-		return time.Time{}, fmt.Errorf("scanner: %s", err)
-	}
-
-	return time.Time{}, fmt.Errorf("state file had no content")
-}
-
-// WriteStateFile writes the given time to the state file.
-//
-// The state file has no content other than a unixtime.
-func WriteStateFile(path string, startTime time.Time) error {
-	fh, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-
-	unixtime := fmt.Sprintf("%d", startTime.Unix())
-
-	n, err := fh.WriteString(unixtime)
-	if err != nil {
-		_ = fh.Close()
-		return err
-	}
-
-	if n != len(unixtime) {
-		_ = fh.Close()
-		return fmt.Errorf("short write")
-	}
-
-	err = fh.Close()
-	if err != nil {
-		return fmt.Errorf("slose error: %s", err)
-	}
-
-	return nil
-}
 
 // ConnectToDB opens a new connection to the database.
 func ConnectToDB(host, user, pass, name string, port int) (*sql.DB, error) {
