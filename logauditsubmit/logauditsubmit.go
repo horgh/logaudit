@@ -29,7 +29,7 @@ import (
 	"strings"
 	"time"
 
-	"summercat.com/logaudit/lib"
+	"github.com/horgh/logaudit/lib"
 )
 
 // Args holds the command line arguments.

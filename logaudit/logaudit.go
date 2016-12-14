@@ -24,7 +24,7 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"summercat.com/logaudit/lib"
+	"github.com/horgh/logaudit/lib"
 )
 
 // Args holds the command line arguments.
