@@ -627,16 +627,20 @@ func assignTimeToLines(lines []*lib.LogLine, config LogConfig,
 	for _, line := range lines {
 		lineTime, err := parseLineTime(line.Line, location, config.TimeLayout)
 		if err != nil {
+			// Be generous and accept it anyway. Apply the last line's timestamp, but
+			// warn about this happening.
 			if config.TimestampStrategy == EveryLine {
-				return fmt.Errorf("line's time could not be determined: %s: %s",
+				log.Printf("Warning: line's time could not be determined: %#v: %s",
 					line, err)
+				line.Time = lastLineTime
+				continue
 			}
 
 			if config.TimestampStrategy == LastLine {
 				// We've not yet seen any timestamp. We want to apply the timestamp
 				// from the last log line that had one.
 				if lastLineTime == zeroTime {
-					return fmt.Errorf("line's time could not be determined: %s: %s",
+					return fmt.Errorf("line's time could not be determined: %#v: %s",
 						line, err)
 				}
 				line.Time = lastLineTime
