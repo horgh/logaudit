@@ -100,7 +100,9 @@ func main() {
 
 	args, err := getArgs()
 	if err != nil {
-		log.Fatalf("Invalid argument: %s", err)
+		log.Printf("Invalid argument: %s", err)
+		flag.PrintDefaults()
+		os.Exit(1)
 	}
 
 	stateFileTime, err := readStateFileTime(args.StateFile)
@@ -144,7 +146,6 @@ func getArgs() (Args, error) {
 	flag.Parse()
 
 	if len(*config) == 0 {
-		flag.PrintDefaults()
 		return Args{}, fmt.Errorf("you must provide a config file")
 	}
 	fi, err := os.Stat(*config)
@@ -152,7 +153,7 @@ func getArgs() (Args, error) {
 		return Args{}, fmt.Errorf("invalid config file: %s", err)
 	}
 	if !fi.Mode().IsRegular() {
-		return Args{}, fmt.Errorf("nvalid config file: %s: not a regular file",
+		return Args{}, fmt.Errorf("invalid config file: %s: not a regular file",
 			*config)
 	}
 
