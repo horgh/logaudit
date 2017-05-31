@@ -1,4 +1,3 @@
-//
 // This program's purpose is to submit logs to a log server.
 //
 // It reads all logs under /var/log, skips any included in a prior run, and
@@ -9,7 +8,6 @@
 //
 // After it completes, it records when it started. At startup, it reads in the
 // last time it ran, and uses this as a basis to know what log lines to send.
-//
 package main
 
 import (
@@ -63,9 +61,10 @@ type LogConfig struct {
 	// to look at line by line. e.g., binary type logs.
 	FullyIgnore bool
 
-	// TimeLayout is a time layout format. See the Constants section on the
-	// Go time package page. We use it to parse timestamps on log lines.
-	TimeLayout string
+	// TimeLayouts holds a set of time layout formats. See the Constants section
+	// on the Go time package page for what a time layout is. We use them to parse
+	// timestamps on log lines. We try them in order until one succeeds.
+	TimeLayouts []string
 
 	// Decide how to get timestamp from a log.
 	// Ideally we will have a timestamp on each log line. However this is not
@@ -272,11 +271,11 @@ func writeStateFile(path string, startTime time.Time) error {
 // FullyIgnore: y or n
 //   To ignore the file completely
 //
-// TimeLayout: Time layout string
-//   This allows you to specify the timestamp format of the log. It must be
-//   at the beginning of the log line. The format for this string is the same
-//   as Go's time layout.
-//   If you don't specify this, the default is time.Stamp.
+// TimeLayouts: Time layout string
+//   This allows you to specify the timestamp formats of the log. They must be
+//   at the beginning of the log line. The format for these strings is the same
+//   as Go's time layout. If you don't specify this, the default is only
+//   time.Stamp.
 //
 // TimestampStrategy: The method to use to extract timestamps for each log line.
 //   This can currently be "every-line", which means to require a valid
@@ -322,7 +321,7 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 			}
 			config = LogConfig{
 				FilenamePattern:   matches[1],
-				TimeLayout:        time.Stamp,
+				TimeLayouts:       []string{time.Stamp},
 				TimestampStrategy: EveryLine,
 			}
 			continue
@@ -344,7 +343,7 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 			if config.FilenamePattern == "" {
 				return nil, fmt.Errorf("you must set FilenamePattern to start a config block")
 			}
-			config.TimeLayout = matches[1]
+			config.TimeLayouts = append(config.TimeLayouts, matches[1])
 			continue
 		}
 
@@ -626,7 +625,7 @@ func assignTimeToLines(lines []*lib.LogLine, config LogConfig,
 	var zeroTime time.Time
 
 	for _, line := range lines {
-		lineTime, err := parseLineTime(line.Line, location, config.TimeLayout)
+		lineTime, err := parseLineTime(line.Line, location, config.TimeLayouts)
 		if err != nil {
 			// Be generous and accept it anyway. Apply the last line's timestamp, but
 			// warn about this happening.
@@ -670,55 +669,63 @@ func assignTimeToLines(lines []*lib.LogLine, config LogConfig,
 
 // parseLineTime attempts to parse the timestamp from the log line.
 func parseLineTime(line string, location *time.Location,
-	timeLayout string) (time.Time, error) {
-
-	// ParseInLocation does not like there to be extra text. It wants only the
-	// timestamp portion to be present. Let's try to strip off only the timestamp.
-
-	// I do this by counting how many spaces are in the layout, and then trying
-	// to copy from the line until we have the same number of spaces copied.
-
-	var lastChar rune
-
-	lineStamp := ""
-	for _, c := range line {
-		if c == ' ' {
-			// Stop when we have as many space blocks as the layout.
-			// Ensure we don't mistake a new block for the current one by checking
-			// the last character we saw.
-			if countCharBlocksInString(lineStamp, ' ') ==
-				countCharBlocksInString(timeLayout, ' ') &&
-				lastChar != ' ' {
-				break
-			}
-		}
-
-		lineStamp += string(c)
-		lastChar = c
-	}
-
-	lineTime, err := time.ParseInLocation(timeLayout, lineStamp, location)
+	timeLayouts []string) (time.Time, error) {
+	t, err := parseTimestamp(line, location, timeLayouts)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("could not parse line's timestamp: %s: %s",
-			lineStamp, err)
+		return time.Time{}, err
 	}
 
-	// Unspecified fields become zero. Like year for time layouts.
-	// Put zero years in the current year. Yes, this is invalid when we roll
-	// over in December/January if we're not careful.
-	if lineTime.Year() == 0 {
-		// Assumption: If it is January and the line we see is in December, then
-		// it is in the current year - 1. Otherwise, put the line in the current
-		// year.
+	// Unspecified fields become zero. Like year for time layouts. Put zero years
+	// in the current year. Yes, this is invalid when we roll over in
+	// December/January if we're not careful.
+	if t.Year() == 0 {
+		// Assumption: If it is January and the line we see is in December, then it
+		// is in the current year - 1. Otherwise, put the line in the current year.
 		year := time.Now().Year()
-		if time.Now().Month() == time.January && lineTime.Month() == time.December {
+		if time.Now().Month() == time.January && t.Month() == time.December {
 			year = time.Now().Year() - 1
 		}
 
-		lineTime = lineTime.AddDate(year, 0, 0)
+		t = t.AddDate(year, 0, 0)
 	}
 
-	return lineTime, nil
+	return t, nil
+}
+
+func parseTimestamp(line string, location *time.Location,
+	timeLayouts []string) (time.Time, error) {
+	for _, layout := range timeLayouts {
+		// ParseInLocation does not like there to be extra text. It wants only the
+		// timestamp portion to be present. Let's try to strip off only the
+		// timestamp.
+		//
+		// I do this by counting how many spaces are in the layout, and then trying
+		// to copy from the line until we have the same number of spaces copied.
+		var lastChar rune
+		timestamp := ""
+		for _, c := range line {
+			if c == ' ' {
+				// Stop when we have as many space blocks as the layout. Ensure we
+				// don't mistake a new block for the current one by checking the last
+				// character we saw.
+				if countCharBlocksInString(timestamp, ' ') ==
+					countCharBlocksInString(layout, ' ') &&
+					lastChar != ' ' {
+					break
+				}
+			}
+
+			timestamp += string(c)
+			lastChar = c
+		}
+
+		t, err := time.ParseInLocation(layout, timestamp, location)
+		if err == nil {
+			return t, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("could not parse line's timestamp")
 }
 
 // countCharBlocksInString counts how many parts of a string consist of
