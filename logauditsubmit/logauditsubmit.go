@@ -61,6 +61,20 @@ type LogConfig struct {
 	// to look at line by line. e.g., binary type logs.
 	FullyIgnore bool
 
+	// TimeRegexp is a regex to extract the timestamp portion of the log line.
+	//
+	// Sometimes log lines do not have their timestamps sufficiently close to the
+	// beginning of a line to do without this, or they begin with a dynamic
+	// prefix. Using a regex we can extract the timestamp portion and then parse
+	// it with time layouts. However, it's often possible to write a time layout
+	// such that this is not necessary.
+	//
+	// If specified, the regex must have a single capture group. We will apply
+	// TimeLayouts to what we capture.
+	//
+	// If not specified then we use the line as is.
+	TimeRegexp *regexp.Regexp
+
 	// TimeLayouts holds a set of time layout formats. See the Constants section
 	// on the Go time package page for what a time layout is. We use them to parse
 	// timestamps on log lines. We try them in order until one succeeds.
@@ -271,6 +285,9 @@ func writeStateFile(path string, startTime time.Time) error {
 // FullyIgnore: y or n
 //   To ignore the file completely
 //
+// TimeRegexp: A regex with a single capture group. Refer to LogConfig for what
+//   this is.
+//
 // TimeLayouts: Time layout string
 //   This allows you to specify the timestamp formats of the log. They must be
 //   at the beginning of the log line. The format for these strings is the same
@@ -334,6 +351,20 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 				return nil, fmt.Errorf("you must set FilenamePattern to start a config block")
 			}
 			config.FullyIgnore = matches[1] == "y"
+			continue
+		}
+
+		timeRegexpRe := regexp.MustCompile("^TimeRegexp: (.+)")
+		if matches := timeRegexpRe.FindStringSubmatch(text); matches != nil {
+			if config.FilenamePattern == "" {
+				return nil, fmt.Errorf(
+					"you must set FilenamePattern to start a config block")
+			}
+			re, err := regexp.Compile(matches[1])
+			if err != nil {
+				return nil, fmt.Errorf("error compiling regex: %s: %s", matches[1], err)
+			}
+			config.TimeRegexp = re
 			continue
 		}
 
@@ -625,7 +656,8 @@ func assignTimeToLines(lines []*lib.LogLine, config LogConfig,
 	var zeroTime time.Time
 
 	for _, line := range lines {
-		lineTime, err := parseLineTime(line.Line, location, config.TimeLayouts)
+		lineTime, err := parseLineTime(line.Line, location, config.TimeRegexp,
+			config.TimeLayouts)
 		if err != nil {
 			// Be generous and accept it anyway. Apply the last line's timestamp, but
 			// warn about this happening.
@@ -668,9 +700,13 @@ func assignTimeToLines(lines []*lib.LogLine, config LogConfig,
 }
 
 // parseLineTime attempts to parse the timestamp from the log line.
-func parseLineTime(line string, location *time.Location,
-	timeLayouts []string) (time.Time, error) {
-	t, err := parseTimestamp(line, location, timeLayouts)
+func parseLineTime(
+	line string,
+	location *time.Location,
+	timeRegexp *regexp.Regexp,
+	timeLayouts []string,
+) (time.Time, error) {
+	t, err := parseTimestamp(line, location, timeRegexp, timeLayouts)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -692,8 +728,20 @@ func parseLineTime(line string, location *time.Location,
 	return t, nil
 }
 
-func parseTimestamp(line string, location *time.Location,
-	timeLayouts []string) (time.Time, error) {
+func parseTimestamp(
+	line string,
+	location *time.Location,
+	timeRegexp *regexp.Regexp,
+	timeLayouts []string,
+) (time.Time, error) {
+	if timeRegexp != nil {
+		matches := timeRegexp.FindStringSubmatch(line)
+		if matches == nil {
+			return time.Time{}, fmt.Errorf("time regexp did not match on line")
+		}
+		line = matches[1]
+	}
+
 	for _, layout := range timeLayouts {
 		// ParseInLocation does not like there to be extra text. It wants only the
 		// timestamp portion to be present. Let's try to strip off only the
