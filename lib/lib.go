@@ -1,6 +1,4 @@
-//
 // Package lib holds functionality common to different logaudit programs.
-//
 package lib
 
 import (
@@ -110,11 +108,11 @@ func GetDB(host, user, pass, name string, port int) (*sql.DB, error) {
 // root plus the subdirectory pattern match the log file.
 //
 // The pattern is a filepath.Match() pattern.
-func FileMatch(root string, file string, path string) (bool, error) {
-	pattern := fmt.Sprintf("%s%c%s", root, os.PathSeparator, path)
-	match, err := filepath.Match(pattern, file)
+func FileMatch(root string, path string, subdirPattern string) (bool, error) {
+	pattern := fmt.Sprintf("%s%c%s", root, os.PathSeparator, subdirPattern)
+	match, err := filepath.Match(pattern, path)
 	if err != nil {
-		return false, fmt.Errorf("filepath.Match: %s: %s: %s", pattern, file, err)
+		return false, fmt.Errorf("filepath.Match: %s: %s: %s", pattern, path, err)
 	}
 	return match, nil
 }

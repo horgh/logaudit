@@ -488,14 +488,18 @@ func findLogFiles(root string) ([]string, error) {
 // Then read in the log's lines. Try to assign a timestamp to each one.
 //
 // Then submit to logauditd.
-func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
-	location *time.Location, lastRunTime time.Time, verbose bool,
-	submitURL string) error {
-
+func readAndSubmitLogs(
+	logFiles []string,
+	logConfigs []LogConfig,
+	location *time.Location,
+	lastRunTime time.Time,
+	verbose bool,
+	submitURL string,
+) error {
 	logToLines := make(map[string][]*lib.LogLine)
 
 	for _, logFile := range logFiles {
-		config, match, err := getConfigForLogFile(logFile, logConfigs)
+		config, match, err := getConfigForLogFile(logFile, logConfigs, verbose)
 		if err != nil {
 			return fmt.Errorf("unable to determine config for log file: %s: %s",
 				logFile, err)
@@ -509,7 +513,7 @@ func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
 			continue
 		}
 
-		logLines, err := readLog(logFile, config, location, lastRunTime)
+		logLines, err := readLog(logFile, config, location, lastRunTime, verbose)
 		if err != nil {
 			return fmt.Errorf("unable to read log: %s: %s", logFile, err)
 		}
@@ -526,9 +530,11 @@ func readAndSubmitLogs(logFiles []string, logConfigs []LogConfig,
 
 // Look at each log config. If it matches the log file, return it. We return the
 // first one that matches.
-func getConfigForLogFile(file string,
-	configs []LogConfig) (LogConfig, bool, error) {
-
+func getConfigForLogFile(
+	file string,
+	configs []LogConfig,
+	verbose bool,
+) (LogConfig, bool, error) {
 	for _, config := range configs {
 		match, err := lib.FileMatch(lib.LogDir, file, config.FilenamePattern)
 		if err != nil {
@@ -536,6 +542,9 @@ func getConfigForLogFile(file string,
 		}
 
 		if match {
+			if verbose {
+				fmt.Printf("Matched file: %s to: %+v\n", file, config)
+			}
 			return config, true, nil
 		}
 	}
@@ -547,8 +556,16 @@ func getConfigForLogFile(file string,
 // Try to assign a timestamp to each log line.
 //
 // Skip any that are before the last run time.
-func readLog(file string, config LogConfig, location *time.Location,
-	lastRunTime time.Time) ([]*lib.LogLine, error) {
+func readLog(
+	file string,
+	config LogConfig,
+	location *time.Location,
+	lastRunTime time.Time,
+	verbose bool,
+) ([]*lib.LogLine, error) {
+	if verbose {
+		fmt.Printf("Looking at log %s...\n", file)
+	}
 
 	// Skip it if its modified time is before our start time.
 	fi, err := os.Stat(file)
@@ -556,6 +573,10 @@ func readLog(file string, config LogConfig, location *time.Location,
 		return nil, fmt.Errorf("stat: %s: %s", file, err)
 	}
 	if fi.ModTime().Before(lastRunTime) {
+		if verbose {
+			fmt.Printf("Skipping log %s (last modified before our last run time)\n",
+				file)
+		}
 		return nil, nil
 	}
 
