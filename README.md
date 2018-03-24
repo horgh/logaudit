@@ -23,3 +23,17 @@ know deeply about what logs I watch and what messages I see or do not see.
   database.
 * Analysis: logaudit retrieves logs from the database and applies filters
   to determine whether to show each line.
+
+
+# Setting up a server to submit logs
+This assumes you have a server running `logauditd` already.
+
+- Build and copy `logauditsubmit` to the server
+- Copy your `logauditsubmit.conf` to the server (or create one and copy it)
+- In root's crontab, add something like:
+```
+21 6 * * * /home/user/logauditsubmit -config /home/user/logauditsubmit.conf -state-file /home/user/logauditsubmit.state -submit-url https://host/submit 2>&1
+```
+- Run the command manually and verify it works
+- Ensure mail from root gets delivered somewhere so you will receive it if
+  anything breaks
