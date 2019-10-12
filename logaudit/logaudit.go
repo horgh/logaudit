@@ -325,8 +325,7 @@ func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly,
 	}
 
 	if verbose {
-		log.Printf("Fetched %d hosts in %s", len(hosts),
-			time.Now().Sub(fetchStartTime))
+		log.Printf("Fetched %d hosts in %s", len(hosts), time.Since(fetchStartTime))
 	}
 
 	hostToLogToLines, hostToTime, err := fetchAndFilterLines(configs, db, hosts,
@@ -469,7 +468,7 @@ func fetchAndFilterLines(configs []LogConfig, db *sql.DB, hosts []Host,
 
 		if verbose {
 			log.Printf("Fetched logs for host %s in %s", host.Hostname,
-				time.Now().Sub(fetchStartTime))
+				time.Since(fetchStartTime))
 		}
 
 		// Track the most recent line time we see for this host.
