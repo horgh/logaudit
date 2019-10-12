@@ -23,6 +23,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/pkg/errors"
 
 	"github.com/horgh/logaudit/lib"
 )
@@ -339,6 +340,10 @@ func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly,
 	err = recordHostLogTimes(db, hosts, hostToTime)
 	if err != nil {
 		return fmt.Errorf("unable to record log times for hosts: %s", err)
+	}
+
+	if err := cleanOldLogs(db); err != nil {
+		return errors.WithMessage(err, "error cleaning up old logs")
 	}
 
 	return nil
@@ -673,5 +678,14 @@ func recordHostLogTimes(db *sql.DB, hosts []Host,
 		}
 	}
 
+	return nil
+}
+
+func cleanOldLogs(db *sql.DB) error {
+	if _, err := db.Exec(
+		`DELETE FROM log_line WHERE time < NOW() - INTERVAL '1 month'`,
+	); err != nil {
+		return errors.Wrap(err, "error deleting rows")
+	}
 	return nil
 }
