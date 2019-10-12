@@ -30,9 +30,6 @@ import (
 
 // Args holds the command line arguments.
 type Args struct {
-	// Verbose output.
-	Verbose bool
-
 	// ConfigFile is the file describing the logs to look at.
 	ConfigFile string
 
@@ -102,7 +99,7 @@ func main() {
 		return
 	}
 
-	err = auditLogs(config, configs, args.ShowIgnoredOnly, args.Verbose)
+	err = auditLogs(config, configs, args.ShowIgnoredOnly)
 	if err != nil {
 		log.Fatalf("Failure examining logs: %s", err)
 	}
@@ -110,7 +107,6 @@ func main() {
 
 // getArgs retrieves and validates command line arguments.
 func getArgs() (Args, error) {
-	verbose := flag.Bool("verbose", false, "Enable verbose output.")
 	config := flag.String("config", "", "Path to the configuration file.")
 	showIgnored := flag.Bool("show-ignored-only", false, "Show ignored lines only.")
 	checkConfig := flag.Bool("check-config", false, "Check the config for issues and then exit.")
@@ -131,7 +127,6 @@ func getArgs() (Args, error) {
 	}
 
 	return Args{
-		Verbose:         *verbose,
 		ConfigFile:      *config,
 		ShowIgnoredOnly: *showIgnored,
 		CheckConfig:     *checkConfig,
@@ -293,8 +288,11 @@ func parseConfig(configFile string, checkConfig bool) (*Config, []LogConfig,
 // It outputs lines that pass the filters.
 //
 // It records the time of the most recent log for each host.
-func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly,
-	verbose bool) error {
+func auditLogs(
+	config *Config,
+	configs []LogConfig,
+	showIgnoredOnly bool,
+) error {
 	db, err := lib.GetDB(config.DBHost, config.DBUser, config.DBPass,
 		config.DBName, config.DBPort)
 	if err != nil {
@@ -315,22 +313,13 @@ func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly,
 	// lead to us missing logs for host(s) that didn't submit for some reason
 	// before our last audit run.
 
-	fetchStartTime := time.Now()
-	if verbose {
-		log.Printf("Fetching hosts...")
-	}
-
 	hosts, err := dbGetHosts(db)
 	if err != nil {
 		return fmt.Errorf("unable to retrieve hosts: %s", err)
 	}
 
-	if verbose {
-		log.Printf("Fetched %d hosts in %s", len(hosts), time.Since(fetchStartTime))
-	}
-
 	hostToLogToLines, hostToTime, err := fetchAndFilterLines(configs, db, hosts,
-		showIgnoredOnly, verbose)
+		showIgnoredOnly)
 	if err != nil {
 		return fmt.Errorf("unable to fetch/filter lines: %s", err)
 	}
@@ -433,8 +422,12 @@ func dbGetHosts(db *sql.DB) ([]Host, error) {
 // We also return the timestamp of the most recent log line we see for each
 // host. This is in a map keyed by hostname. This needs to be inside this
 // function as we want to know the newest line we see, filtered out or not.
-func fetchAndFilterLines(configs []LogConfig, db *sql.DB, hosts []Host,
-	showIgnoredOnly, verbose bool) (map[string]map[string][]*lib.LogLine,
+func fetchAndFilterLines(
+	configs []LogConfig,
+	db *sql.DB,
+	hosts []Host,
+	showIgnoredOnly bool,
+) (map[string]map[string][]*lib.LogLine,
 	map[string]time.Time, error) {
 	// Gather all ignore patterns in one slice. Certain log files apply all
 	// patterns at once.
@@ -453,21 +446,10 @@ func fetchAndFilterLines(configs []LogConfig, db *sql.DB, hosts []Host,
 		// host). But give some buffer around last log line we saw.
 		filterStartTime := host.AuditedUntil.Add(-time.Hour)
 
-		fetchStartTime := time.Now()
-		if verbose {
-			log.Printf("Fetching logs for host %s (start: %s)...", host.Hostname,
-				filterStartTime)
-		}
-
 		lines, err := dbFetchLines(db, host.Hostname, filterStartTime)
 		if err != nil {
 			return nil, nil, fmt.Errorf("unable to fetch lines from database: %s",
 				err)
-		}
-
-		if verbose {
-			log.Printf("Fetched logs for host %s in %s", host.Hostname,
-				time.Since(fetchStartTime))
 		}
 
 		// Track the most recent line time we see for this host.
@@ -491,8 +473,7 @@ func fetchAndFilterLines(configs []LogConfig, db *sql.DB, hosts []Host,
 				continue
 			}
 
-			keep := filterLine(config, ignorePatterns, line.Line, showIgnoredOnly,
-				verbose)
+			keep := filterLine(config, ignorePatterns, line.Line, showIgnoredOnly)
 			if !keep {
 				continue
 			}
@@ -588,9 +569,12 @@ func getConfigForLogFile(root, file string,
 
 // filterLine decides whether a line should be shown or not by applying our
 // filters.
-func filterLine(config LogConfig, allIgnorePatterns []*regexp.Regexp,
-	line string, showIgnoredOnly bool, verbose bool) bool {
-
+func filterLine(
+	config LogConfig,
+	allIgnorePatterns []*regexp.Regexp,
+	line string,
+	showIgnoredOnly bool,
+) bool {
 	var ignorePatterns []*regexp.Regexp
 	if config.IncludeAllIgnorePatterns {
 		ignorePatterns = allIgnorePatterns
