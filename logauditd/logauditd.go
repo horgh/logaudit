@@ -54,7 +54,7 @@ type HTTPHandler struct {
 }
 
 func main() {
-	log.SetFlags(log.Ldate | log.Ltime)
+	log.SetFlags(0)
 
 	args, err := getArgs()
 	if err != nil {
