@@ -149,7 +149,7 @@ func parseConfig(configFile string) (Config, error) {
 			continue
 		}
 
-		re := regexp.MustCompile("^(\\S+): (.+)")
+		re := regexp.MustCompile(`^(\S+): (.+)`)
 		matches := re.FindStringSubmatch(text)
 		if matches == nil {
 			return Config{}, fmt.Errorf("invalid config line: %s", text)
