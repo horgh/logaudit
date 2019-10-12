@@ -192,7 +192,7 @@ func parseConfig(configFile string, checkConfig bool) (*Config, []LogConfig,
 			continue
 		}
 
-		dbRe := regexp.MustCompile("^db-(\\S+): (.+)")
+		dbRe := regexp.MustCompile(`^db-(\S+): (.+)`)
 		matches := dbRe.FindStringSubmatch(text)
 		if matches != nil {
 			if matches[1] == "host" {
