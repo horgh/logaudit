@@ -600,18 +600,11 @@ func filterLine(config LogConfig, allIgnorePatterns []*regexp.Regexp,
 
 	for _, re := range ignorePatterns {
 		if re.MatchString(line) {
-			if showIgnoredOnly {
-				return true
-			}
-			return false
+			return showIgnoredOnly
 		}
 	}
 
-	if showIgnoredOnly {
-		return false
-	}
-
-	return true
+	return !showIgnoredOnly
 }
 
 // Output the lines we retrieved.
