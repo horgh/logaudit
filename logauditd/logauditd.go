@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/pkg/errors"
 
 	"github.com/horgh/logaudit/lib"
 )
@@ -281,6 +282,13 @@ func (h HTTPHandler) submitRequest(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := insertHost(db, submission.Hostname); err != nil {
+		log.Printf("Unable to insert host: %s", err)
+		rw.WriteHeader(http.StatusInternalServerError)
+		_, _ = rw.Write([]byte("<h1>Internal server error</h1>"))
+		return
+	}
+
 	// Insert log lines.
 	err = insertLines(db, submission.Hostname, lines)
 	if err != nil {
@@ -306,9 +314,12 @@ func (h HTTPHandler) submitRequest(rw http.ResponseWriter, r *http.Request) {
 // then compare.
 func filterLines(db *sql.DB, hostname string, lines []*lib.LogLine,
 	earliestLogTime time.Time) ([]*lib.LogLine, error) {
-
-	query := `SELECT filename, line, time FROM log_line
-	WHERE hostname = $1 AND time >= $2`
+	query := `
+		SELECT ll.filename, ll.line, ll.time
+		FROM log_line ll
+		JOIN host h ON h.id = ll.host_id
+		WHERE h.hostname = $1 AND ll.time >= $2
+	`
 
 	rows, err := db.Query(query, hostname, earliestLogTime)
 	if err != nil {
@@ -353,6 +364,21 @@ func filterLines(db *sql.DB, hostname string, lines []*lib.LogLine,
 	return newLines, nil
 }
 
+func insertHost(db *sql.DB, hostname string) error {
+	if _, err := db.Exec(
+		`
+			INSERT INTO host (hostname) VALUES ($1)
+			ON CONFLICT (hostname)
+			DO NOTHING
+		`,
+		hostname,
+	); err != nil {
+		return errors.Wrap(err, "error inserting host")
+	}
+
+	return nil
+}
+
 // insertLines inserts log lines into the database.
 //
 // Use COPY FROM for fast inserts.
@@ -363,8 +389,24 @@ func insertLines(db *sql.DB, hostname string, lines []*lib.LogLine) error {
 		return fmt.Errorf("unable to start transaction: %s", err)
 	}
 
-	stmt, err := txn.Prepare(pq.CopyIn("log_line", "hostname", "filename", "line",
-		"time"))
+	if _, err := txn.Exec(
+		`
+			CREATE TEMPORARY TABLE log_line_tmp (
+				hostname VARCHAR NOT NULL,
+				filename VARCHAR NOT NULL,
+				line BYTEA NOT NULL,
+				time TIMESTAMP WITH TIME ZONE NOT NULL
+			)
+			ON COMMIT DROP
+		`,
+	); err != nil {
+		_ = txn.Rollback()
+		return errors.Wrap(err, "error creating temporary table")
+	}
+
+	stmt, err := txn.Prepare(
+		pq.CopyIn("log_line_tmp", "hostname", "filename", "line", "time"),
+	)
 	if err != nil {
 		_ = txn.Rollback()
 		return fmt.Errorf("unable to prepare statement: %s", err)
@@ -391,6 +433,18 @@ func insertLines(db *sql.DB, hostname string, lines []*lib.LogLine) error {
 	if err != nil {
 		_ = txn.Rollback()
 		return fmt.Errorf("unable to close statement: %s", err)
+	}
+
+	if _, err := txn.Exec(
+		`
+			INSERT INTO log_line (host_id, filename, line, time)
+			SELECT h.id, llt.filename, llt.line, llt.time
+			FROM log_line_tmp llt
+			JOIN host h ON h.hostname = llt.hostname
+		`,
+	); err != nil {
+		_ = txn.Rollback()
+		return errors.Wrap(err, "error copying rows from temporary table")
 	}
 
 	err = txn.Commit()

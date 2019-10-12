@@ -346,13 +346,7 @@ func auditLogs(config *Config, configs []LogConfig, showIgnoredOnly,
 
 // Retrieve all hosts and the last time we saw a log line from it.
 func dbGetHosts(db *sql.DB) ([]Host, error) {
-	// A host exists if it ever sent us log lines. We discover hosts this way as
-	// this allows us to avoid a registration phase where a host would have to get
-	// into the host table somehow.
-
-	query := `SELECT DISTINCT hostname FROM log_line`
-
-	rows, err := db.Query(query)
+	rows, err := db.Query(`SELECT hostname FROM host`)
 	if err != nil {
 		return nil, fmt.Errorf("unable to query: %s", err)
 	}
@@ -378,9 +372,9 @@ func dbGetHosts(db *sql.DB) ([]Host, error) {
 
 	// For each host we found, see up until what time we've audited it (if any).
 
-	query = `SELECT hostname, audited_until FROM host`
-
-	rows, err = db.Query(query)
+	rows, err = db.Query(
+		`SELECT hostname, audited_until FROM host WHERE audited_until IS NOT NULL`,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("unable to query: %s", err)
 	}
@@ -525,9 +519,10 @@ func fetchAndFilterLines(configs []LogConfig, db *sql.DB, hosts []Host,
 func dbFetchLines(db *sql.DB, hostname string,
 	filterStartTime time.Time) ([]*lib.LogLine, error) {
 	query := `
-	SELECT hostname, filename, line, time
-	FROM log_line
-	WHERE time >= $1 AND hostname = $2
+		SELECT h.hostname, ll.filename, ll.line, ll.time
+		FROM log_line ll
+		JOIN host h ON h.id = ll.host_id
+		WHERE ll.time >= $1 AND h.hostname = $2
 	`
 
 	rows, err := db.Query(query, filterStartTime, hostname)
@@ -653,9 +648,6 @@ func outputLines(hostToLogToLines map[string]map[string][]*lib.LogLine) {
 // the database only if we have a newer log line than we saw last time.
 func recordHostLogTimes(db *sql.DB, hosts []Host,
 	hostToTime map[string]time.Time) error {
-	// We may see logs for hosts that we never saw before. These will have shown
-	// up in our host list but not yet be in our host table.
-
 	// It's possible we did not see any new lines this run for a host. Don't set
 	// the time in the host table to one earlier than is already there.
 
@@ -670,18 +662,12 @@ func recordHostLogTimes(db *sql.DB, hosts []Host,
 			continue
 		}
 
-		// We need to record the host was audited up until this time. Take care
-		// because there may not be a record in the host table for the host.
-
-		// UPSERT.
-		query := `
-		INSERT INTO host (hostname, audited_until) VALUES($1, $2)
-		ON CONFLICT (hostname)
-		DO UPDATE SET audited_until = EXCLUDED.audited_until
-		`
-
-		_, err := db.Exec(query, host.Hostname, newestTime)
-		if err != nil {
+		// We need to record the host was audited up until this time.
+		if _, err := db.Exec(
+			`UPDATE host SET audited_until = $1 WHERE hostname = $2`,
+			newestTime,
+			host.Hostname,
+		); err != nil {
 			return fmt.Errorf("unable to store host audited time: %s: %s",
 				host.Hostname, err)
 		}

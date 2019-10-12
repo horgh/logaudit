@@ -53,3 +53,19 @@ CREATE TABLE host (
 INSERT INTO host
 (hostname, audited_until)
 SELECT DISTINCT hostname, NOW() FROM log_line;
+
+-- Change log_line to have a foreign key to host.
+
+ALTER TABLE log_line ADD COLUMN host_id INTEGER;
+
+UPDATE log_line SET host_id = host.id
+FROM host WHERE host.hostname = log_line.hostname;
+
+ALTER TABLE log_line ADD FOREIGN KEY (host_id)
+REFERENCES host(id) ON DELETE CASCADE ON UPDATE CASCADE;
+
+ALTER TABLE log_line DROP COLUMN hostname;
+
+CREATE INDEX ON log_line (time, host_id);
+
+ALTER TABLE host ALTER COLUMN audited_until DROP NOT NULL;
