@@ -121,7 +121,7 @@ func main() {
 
 	stateFileTime, err := readStateFileTime(args.StateFile)
 	if err != nil {
-		log.Fatalf("Unable to read state file: %s", err)
+		log.Fatalf("%+v", err)
 	}
 	// To account for buffered writes, use an hour before the state file time
 	// (which should be when the last run started).
@@ -129,12 +129,12 @@ func main() {
 
 	configs, err := parseConfig(args.ConfigFile)
 	if err != nil {
-		log.Fatalf("Unable to parse config: %s", err)
+		log.Fatalf("%+v", err)
 	}
 
 	logFiles, err := findLogFiles(lib.LogDir)
 	if err != nil {
-		log.Fatalf("Unable to find log files: %s", err)
+		log.Fatalf("%+v", err)
 	}
 
 	ctx := context.Background()
@@ -154,7 +154,7 @@ func main() {
 
 	err = writeStateFile(args.StateFile, runStartTime)
 	if err != nil {
-		log.Fatalf("Problem writing state file: %s: %s", args.StateFile, err)
+		log.Fatalf("%+v", err)
 	}
 }
 
