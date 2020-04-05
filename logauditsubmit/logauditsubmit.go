@@ -1,7 +1,7 @@
 // This program ships logs from the server it runs on.
 //
 // It reads all logs under /var/log, skips any included in a prior run, and
-// submits the remainder using an HTTP API to a log server.
+// ships the remainder by publishing them to a GCP Pub/Sub topic.
 //
 // It does not do much beyond gather data. It does little parsing and little
 // filtering.
@@ -12,14 +12,12 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
-	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
@@ -28,7 +26,10 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/pubsub"
+
 	"github.com/horgh/logaudit/lib"
+	"github.com/pkg/errors"
 )
 
 // Args holds the command line arguments.
@@ -46,8 +47,8 @@ type Args struct {
 	// Location is our time zone location.
 	Location *time.Location
 
-	// URL to submit logs to.
-	SubmitURL string
+	projectID string
+	topic     string
 }
 
 // LogConfig is a block read from the config file. It describes what to do with
@@ -136,10 +137,19 @@ func main() {
 		log.Fatalf("Unable to find log files: %s", err)
 	}
 
-	err = readAndSubmitLogs(logFiles, configs, args.Location, lastRunTime,
-		args.Verbose, args.SubmitURL)
-	if err != nil {
-		log.Fatalf("Failure examining logs: %s", err)
+	ctx := context.Background()
+
+	if err := readAndShipLogs(
+		ctx,
+		args.projectID,
+		args.topic,
+		logFiles,
+		configs,
+		args.Location,
+		lastRunTime,
+		args.Verbose,
+	); err != nil {
+		log.Fatalf("%+v", err)
 	}
 
 	err = writeStateFile(args.StateFile, runStartTime)
@@ -154,7 +164,9 @@ func getArgs() (Args, error) {
 	config := flag.String("config", "", "Path to the configuration file.")
 	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here. We filter log lines to those after the run time if the file is present when we start.")
 	locationString := flag.String("location", "America/Vancouver", "IANA Time Zone database name. We treat timestamps as being in this timezone.")
-	submitURL := flag.String("submit-url", "", "URL to submit logs to. logaudtid URL.")
+
+	projectID := flag.String("project-id", "", "GCP Project ID")
+	topic := flag.String("topic", "logaudit", "Pub/Sub topic")
 
 	flag.Parse()
 
@@ -182,8 +194,12 @@ func getArgs() (Args, error) {
 		return Args{}, fmt.Errorf("invalid location: %s", err)
 	}
 
-	if len(*submitURL) == 0 {
-		return Args{}, fmt.Errorf("you must provide a log submit URL")
+	if *projectID == "" {
+		return Args{}, errors.New("project ID is required")
+	}
+
+	if *topic == "" {
+		return Args{}, errors.New("topic is required")
 	}
 
 	return Args{
@@ -191,7 +207,8 @@ func getArgs() (Args, error) {
 		ConfigFile: *config,
 		StateFile:  *stateFile,
 		Location:   location,
-		SubmitURL:  *submitURL,
+		projectID:  *projectID,
+		topic:      *topic,
 	}, nil
 }
 
@@ -479,22 +496,23 @@ func findLogFiles(root string) ([]string, error) {
 	return logFiles, nil
 }
 
-// readAndSubmitLogs reads in each log and submits its lines to a logauditd
-// server.
+// readAndShipLogs reads in each log and ships its lines.
 //
 // First, try to recognize the filename. This helps us know how to determine
 // log line time.
 //
 // Then read in the log's lines. Try to assign a timestamp to each one.
 //
-// Then submit to logauditd.
-func readAndSubmitLogs(
+// Then ship them.
+func readAndShipLogs(
+	ctx context.Context,
+	projectID,
+	topic string,
 	logFiles []string,
 	logConfigs []LogConfig,
 	location *time.Location,
 	lastRunTime time.Time,
 	verbose bool,
-	submitURL string,
 ) error {
 	logToLines := make(map[string][]*lib.LogLine)
 
@@ -520,9 +538,8 @@ func readAndSubmitLogs(
 		logToLines[logFile] = logLines
 	}
 
-	err := submitWithRetries(submitURL, logToLines, verbose, lastRunTime)
-	if err != nil {
-		return fmt.Errorf("gave up trying to submit logs: %s", err)
+	if err := ship(ctx, projectID, topic, logToLines, lastRunTime); err != nil {
+		return errors.WithMessage(err, "error shipping logs")
 	}
 
 	return nil
@@ -817,48 +834,13 @@ func countCharBlocksInString(s string, c rune) int {
 	return count
 }
 
-// Submit logs to the submission server. Retry a number of times until we
-// hopefully succeed.
-//
-// It is possible that the endpoint is down or overloaded. We want to retry to
-// work around transient failures.
-func submitWithRetries(submitURL string, logToLines map[string][]*lib.LogLine,
-	verbose bool, lastRunTime time.Time) error {
-	// Retry this many times (max).
-	retries := 5
-	// Delay at most this many seconds before next retry.
-	maxDelaySeconds := 60 * 5
-
-	for i := 0; i < retries; i++ {
-		err := submit(submitURL, logToLines, verbose, lastRunTime)
-		if err != nil {
-			log.Printf("Failed to submit logs (attempt #%d): %s", i+1, err)
-
-			// [1, maxDelaySeconds]
-			delaySeconds := rand.Intn(maxDelaySeconds) + 1
-
-			durationStr := fmt.Sprintf("%ds", delaySeconds)
-			duration, err := time.ParseDuration(durationStr)
-			if err != nil {
-				return fmt.Errorf("unable to parse duration: %s", durationStr)
-			}
-
-			log.Printf("Sleeping for %s before next attempt", duration)
-			time.Sleep(duration)
-
-			continue
-		}
-
-		return nil
-	}
-
-	return fmt.Errorf("tried %d times to submit logs. all failed", retries)
-}
-
-// submit sends the logs to the submission server.
-func submit(submitURL string, logToLines map[string][]*lib.LogLine,
-	verbose bool, lastRunTime time.Time) error {
-
+func ship(
+	ctx context.Context,
+	projectID,
+	topic string,
+	logToLines map[string][]*lib.LogLine,
+	lastRunTime time.Time,
+) error {
 	hostname, err := getHostname()
 	if err != nil {
 		return err
@@ -871,45 +853,33 @@ func submit(submitURL string, logToLines map[string][]*lib.LogLine,
 
 	for _, lines := range logToLines {
 		submission.Lines = append(submission.Lines, lines...)
-		for _, line := range lines {
-			if verbose {
-				fmt.Printf("%s: %s\n", line.Log, line.Line)
-			}
-		}
 	}
-
-	// We don't really need to submit if there are somehow zero log lines, but it
-	// is good to be able to see we are still alive.
 
 	submissionJSON, err := json.Marshal(submission)
 	if err != nil {
 		return fmt.Errorf("unable to generate JSON: %s", err)
 	}
 
-	if verbose {
-		log.Printf("Submission is %d bytes", len(submissionJSON))
-	}
-
-	client := &http.Client{Timeout: 10 * time.Minute}
-
-	reader := bytes.NewReader(submissionJSON)
-
-	resp, err := client.Post(submitURL, "application/json", reader)
+	c, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
-		return err
-	}
-	defer func() {
-		err := resp.Body.Close()
-		if err != nil {
-			log.Printf("Response body close: %s", err)
-		}
-	}()
-
-	if resp.StatusCode == 200 {
-		return nil
+		return errors.Wrap(err, "error creating pubsub client")
 	}
 
-	return fmt.Errorf("API responded with HTTP %d", resp.StatusCode)
+	t := c.Topic(topic)
+
+	res := t.Publish(
+		ctx,
+		&pubsub.Message{
+			Data: submissionJSON,
+		},
+	)
+	defer t.Stop()
+
+	if _, err := res.Get(ctx); err != nil {
+		return errors.Wrap(err, "error publishing")
+	}
+
+	return nil
 }
 
 // Retrieve system FQDN.
