@@ -1,10 +1,10 @@
-// This program's purpose is to submit logs to a log server.
+// This program ships logs from the server it runs on.
 //
 // It reads all logs under /var/log, skips any included in a prior run, and
 // submits the remainder using an HTTP API to a log server.
 //
 // It does not do much beyond gather data. It does little parsing and little
-// filtering. Its purpose is to ship log lines for analysis elsewhere.
+// filtering.
 //
 // After it completes, it records when it started. At startup, it reads in the
 // last time it ran, and uses this as a basis to know what log lines to send.
