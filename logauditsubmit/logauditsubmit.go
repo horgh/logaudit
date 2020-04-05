@@ -232,7 +232,7 @@ func readStateFileTime(path string) (time.Time, error) {
 				scanner.Text(), err)
 		}
 
-		return time.Unix(unixtime, 0), nil
+		return time.Unix(unixtime, 0), nil //nolint:staticcheck
 	}
 
 	err = scanner.Err()
