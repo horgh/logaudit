@@ -160,7 +160,12 @@ func main() {
 
 // getArgs retrieves and validates command line arguments.
 func getArgs() (Args, error) {
-	verbose := flag.Bool("verbose", false, "Enable verbose output. This prints the lines we submit to stdout.")
+	verbose := flag.Bool(
+		"verbose",
+		false,
+		"Enable verbose output. This prints the lines we ship to stdout.",
+	)
+
 	config := flag.String("config", "", "Path to the configuration file.")
 	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here. We filter log lines to those after the run time if the file is present when we start.")
 	locationString := flag.String("location", "America/Vancouver", "IANA Time Zone database name. We treat timestamps as being in this timezone.")
