@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -23,7 +24,6 @@ import (
 
 	"cloud.google.com/go/pubsub"
 
-	"github.com/horgh/logaudit/lib"
 	"github.com/pkg/errors"
 )
 
@@ -51,7 +51,7 @@ type Args struct {
 // LogConfig is a block read from the config file. It describes what to do with
 // a set of logs.
 type LogConfig struct {
-	// A glob style file pattern. It should be relative to the lib.LogDir.
+	// A glob style file pattern. It should be relative to the logDir.
 	// e.g., auth.log*
 	FilenamePattern string
 
@@ -138,7 +138,7 @@ func main() {
 		log.Fatalf("%+v", err)
 	}
 
-	logFiles, err := findLogFiles(lib.LogDir)
+	logFiles, err := findLogFiles(logDir)
 	if err != nil {
 		log.Fatalf("%+v", err)
 	}
@@ -164,6 +164,8 @@ func main() {
 		log.Fatalf("%+v", err)
 	}
 }
+
+const logDir = "/var/log"
 
 // getArgs retrieves and validates command line arguments.
 func getArgs() (Args, error) {
@@ -622,7 +624,7 @@ func getConfigForLogFile(
 	verbose bool,
 ) (LogConfig, bool, error) {
 	for _, config := range configs {
-		match, err := lib.FileMatch(lib.LogDir, file, config.FilenamePattern)
+		match, err := fileMatch(logDir, file, config.FilenamePattern)
 		if err != nil {
 			return LogConfig{}, false, fmt.Errorf("fileMatch: %s: %s", file, err)
 		}
@@ -637,6 +639,20 @@ func getConfigForLogFile(
 	return LogConfig{}, false, nil
 }
 
+// fileMatch takes a root directory, the actual path to the log file, and a
+// path pattern that should be a subdirectory under the root. It decides if the
+// root plus the subdirectory pattern match the log file.
+//
+// The pattern is a filepath.Match() pattern.
+func fileMatch(root string, path string, subdirPattern string) (bool, error) {
+	pattern := fmt.Sprintf("%s%c%s", root, os.PathSeparator, subdirPattern)
+	match, err := filepath.Match(pattern, path)
+	if err != nil {
+		return false, fmt.Errorf("filepath.Match: %s: %s: %s", pattern, path, err)
+	}
+	return match, nil
+}
+
 // readLog reads a single log file.
 //
 // Try to assign a timestamp to each log line.
@@ -648,7 +664,7 @@ func readLog(
 	location *time.Location,
 	lastRunTime time.Time,
 	verbose bool,
-) ([]*lib.LogLine, error) {
+) ([]*logLine, error) {
 	if verbose {
 		fmt.Printf("Looking at log %s...\n", file)
 	}
@@ -677,7 +693,7 @@ func readLog(
 	}
 
 	// Pull out lines after our last run time.
-	newLines := []*lib.LogLine{}
+	newLines := []*logLine{}
 	for i, line := range lines {
 		if line.Time.Before(lastRunTime) {
 			continue
@@ -692,8 +708,22 @@ func readLog(
 	return newLines, nil
 }
 
+type logLine struct {
+	// Host that had the line. This is not always populated.
+	Hostname string
+
+	// Path to its log.
+	Log string
+
+	// The line itself.
+	Line string
+
+	// Its timestamp.
+	Time time.Time
+}
+
 // Read all log lines into memory.
-func readFileAsLines(path string) ([]*lib.LogLine, error) {
+func readFileAsLines(path string) ([]*logLine, error) {
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open: %s: %s", path, err)
@@ -729,7 +759,7 @@ func readFileAsLines(path string) ([]*lib.LogLine, error) {
 	buf := make([]byte, 1024*1024)
 	scanner.Buffer(buf, cap(buf))
 
-	lines := []*lib.LogLine{}
+	lines := []*logLine{}
 
 	for scanner.Scan() {
 		text := strings.TrimSpace(scanner.Text())
@@ -737,7 +767,7 @@ func readFileAsLines(path string) ([]*lib.LogLine, error) {
 			continue
 		}
 
-		lines = append(lines, &lib.LogLine{
+		lines = append(lines, &logLine{
 			Log:  path,
 			Line: text,
 			// Don't figure out the time yet.
@@ -753,8 +783,12 @@ func readFileAsLines(path string) ([]*lib.LogLine, error) {
 }
 
 // assignTimeToLines sets a time stamp on each log line.
-func assignTimeToLines(lines []*lib.LogLine, config LogConfig,
-	location *time.Location, modTime time.Time) error {
+func assignTimeToLines(
+	lines []*logLine,
+	config LogConfig,
+	location *time.Location,
+	modTime time.Time,
+) error {
 
 	// Track the last time we were able to parse a line's time in this log.
 	// Why? Because some logs don't have a timestamp on every line but we can
@@ -906,9 +940,9 @@ func countCharBlocksInString(s string, c rune) int {
 func filterLogLines(
 	allIgnorePatterns []*regexp.Regexp,
 	config LogConfig,
-	lines []*lib.LogLine,
-) []*lib.LogLine {
-	var interestingLines []*lib.LogLine
+	lines []*logLine,
+) []*logLine {
+	var interestingLines []*logLine
 	for _, line := range lines {
 		keep := filterLine(config, allIgnorePatterns, line.Line)
 		if !keep {
