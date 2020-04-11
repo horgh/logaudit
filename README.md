@@ -28,7 +28,12 @@ Create a config and copy it to the host.
 Add logaudit to root's cron:
 
 ```
-21 6 * * * GOOGLE_APPLICATION_CREDENTIALS=service-account.json /path/to/logaudit -config /path/to/logaudit.conf -project-id myproject -topic mytopic -state-file /path/to/logaudit.state -email you@example.com 2>&1 | logger
+21 6 * * * GOOGLE_APPLICATION_CREDENTIALS=service-account.json /path/to/logaudit \
+  -config /path/to/logaudit.conf \
+  -email you@example.com  \
+  -project-id myproject \
+  -state-file /path/to/logaudit.state \
+  -topic mytopic 2>&1 | logger
 ```
 
 Note `GOOGLE_APPLICATION_CREDENTIALS` only needs to be set if you're using
