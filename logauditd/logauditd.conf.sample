@@ -1,7 +1,0 @@
-listen-host: 127.0.0.1
-listen-port: 8081
-db-host: 127.0.0.1
-db-port: 5432
-db-user: username
-db-pass: password
-db-name: dbname

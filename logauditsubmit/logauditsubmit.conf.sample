@@ -1,9 +1,0 @@
-FilenamePattern: alternatives.log*
-FullyIgnore: y
-
-FilenamePattern: apcupsd.events
-TimeLayout: 2006-01-02 15:04:05 -0700
-
-FilenamePattern: apt/history.log*
-TimeLayout: Start-Date: 2006-01-02  15:04:05
-TimestampStrategy: last-line

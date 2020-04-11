@@ -1,13 +1,8 @@
 // This program ships logs from the server it runs on.
 //
-// It reads all logs under /var/log, skips any included in a prior run, and
-// ships the remainder by publishing them to a GCP Pub/Sub topic.
-//
-// It does not do much beyond gather data. It does little parsing and little
-// filtering.
-//
-// After it completes, it records when it started. At startup, it reads in the
-// last time it ran, and uses this as a basis to know what log lines to send.
+// It reads logs from /var/log, skips those with a timestamp prior to its last
+// run, filters them, and ships the remainder by publishing them to a GCP
+// Pub/Sub topic.
 package main
 
 import (
@@ -40,6 +35,8 @@ type Args struct {
 	// ConfigFile is the file describing the logs to look at.
 	ConfigFile string
 
+	email string
+
 	// StateFile is a file we record our starting runtime in. We can look at this
 	// file as a way to base when to filter logs starting from.
 	StateFile string
@@ -61,6 +58,15 @@ type LogConfig struct {
 	// FullyIgnore means the log will not be read at all. Some logs are not useful
 	// to look at line by line. e.g., binary type logs.
 	FullyIgnore bool
+
+	// IncludeAllIgnorePatterns causes log patterns from every LogConfig to be
+	// used when examining the matched log. This is because some logs have lines
+	// from other logs (syslog for instance).
+	IncludeAllIgnorePatterns bool
+
+	// IgnorePatterns holds the regular expressions that we apply to determine
+	// whether a log line should be ignored or not.
+	IgnorePatterns []*regexp.Regexp
 
 	// TimeRegexp is a regex to extract the timestamp portion of the log line.
 	//
@@ -141,6 +147,7 @@ func main() {
 
 	if err := readAndShipLogs(
 		ctx,
+		args.email,
 		args.projectID,
 		args.topic,
 		logFiles,
@@ -160,18 +167,15 @@ func main() {
 
 // getArgs retrieves and validates command line arguments.
 func getArgs() (Args, error) {
-	verbose := flag.Bool(
-		"verbose",
-		false,
-		"Enable verbose output. This prints the lines we ship to stdout.",
-	)
+	verbose := flag.Bool("verbose", false, "Enable verbose output.")
 
 	config := flag.String("config", "", "Path to the configuration file.")
+	email := flag.String("email", "", "Recipient of logs.")
 	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here. We filter log lines to those after the run time if the file is present when we start.")
 	locationString := flag.String("location", "America/Vancouver", "IANA Time Zone database name. We treat timestamps as being in this timezone.")
 
 	projectID := flag.String("project-id", "", "GCP Project ID")
-	topic := flag.String("topic", "logaudit", "Pub/Sub topic")
+	topic := flag.String("topic", "", "GCP Pub/Sub topic")
 
 	flag.Parse()
 
@@ -185,6 +189,10 @@ func getArgs() (Args, error) {
 	if !fi.Mode().IsRegular() {
 		return Args{}, fmt.Errorf("invalid config file: %s: not a regular file",
 			*config)
+	}
+
+	if *email == "" {
+		return Args{}, errors.New("you must provide an email")
 	}
 
 	if len(*stateFile) == 0 {
@@ -210,6 +218,7 @@ func getArgs() (Args, error) {
 	return Args{
 		Verbose:    *verbose,
 		ConfigFile: *config,
+		email:      *email,
 		StateFile:  *stateFile,
 		Location:   location,
 		projectID:  *projectID,
@@ -289,7 +298,7 @@ func writeStateFile(path string, startTime time.Time) error {
 
 	err = fh.Close()
 	if err != nil {
-		return fmt.Errorf("slose error: %s", err)
+		return fmt.Errorf("close error: %s", err)
 	}
 
 	return nil
@@ -306,6 +315,14 @@ func writeStateFile(path string, startTime time.Time) error {
 //
 // FullyIgnore: y or n
 //   To ignore the file completely
+//
+// IncludeAllIgnorePatterns: y or n
+//   This causes all other log patterns to be included when ignoring lines in
+//   the log. This is useful for logs that have lines that are also in other
+//   lines, such as /var/log/syslog.
+//
+// Ignore: regexp
+//   A regexp applied to each line. If it matches, the line gets ignored.
 //
 // TimeRegexp: A regex with a single capture group. Refer to LogConfig for what
 //   this is.
@@ -373,6 +390,34 @@ func parseConfig(configFile string) ([]LogConfig, error) {
 				return nil, fmt.Errorf("you must set FilenamePattern to start a config block")
 			}
 			config.FullyIgnore = matches[1] == "y"
+			continue
+		}
+
+		includeAllRe := regexp.MustCompile("^IncludeAllIgnorePatterns: (y|n)$")
+		matches = includeAllRe.FindStringSubmatch(text)
+		if matches != nil {
+			if config.FilenamePattern == "" {
+				return nil, errors.New(
+					"you must set FilenamePattern to start a config block",
+				)
+			}
+			config.IncludeAllIgnorePatterns = matches[1] == "y"
+			continue
+		}
+
+		patternRe := regexp.MustCompile("^Ignore: (.+)")
+		matches = patternRe.FindStringSubmatch(text)
+		if matches != nil {
+			if config.FilenamePattern == "" {
+				return nil, errors.New(
+					"you must set FilenamePattern to start a config block",
+				)
+			}
+
+			config.IgnorePatterns = append(
+				config.IgnorePatterns,
+				regexp.MustCompile(matches[1]),
+			)
 			continue
 		}
 
@@ -511,6 +556,7 @@ func findLogFiles(root string) ([]string, error) {
 // Then ship them.
 func readAndShipLogs(
 	ctx context.Context,
+	email,
 	projectID,
 	topic string,
 	logFiles []string,
@@ -519,8 +565,14 @@ func readAndShipLogs(
 	lastRunTime time.Time,
 	verbose bool,
 ) error {
-	logToLines := make(map[string][]*lib.LogLine)
+	// Gather all ignore patterns in one slice. Certain log files apply all
+	// patterns at once.
+	var allIgnorePatterns []*regexp.Regexp
+	for _, config := range logConfigs {
+		allIgnorePatterns = append(allIgnorePatterns, config.IgnorePatterns...)
+	}
 
+	var report string
 	for _, logFile := range logFiles {
 		config, match, err := getConfigForLogFile(logFile, logConfigs, verbose)
 		if err != nil {
@@ -540,10 +592,22 @@ func readAndShipLogs(
 		if err != nil {
 			return fmt.Errorf("unable to read log: %s: %s", logFile, err)
 		}
-		logToLines[logFile] = logLines
+
+		interestingLogLines := filterLogLines(allIgnorePatterns, config, logLines)
+		if len(interestingLogLines) == 0 {
+			continue
+		}
+
+		if report != "" {
+			report += "\n\n"
+		}
+		report += "Logs in " + logFile + ":\n"
+		for _, line := range interestingLogLines {
+			report += line.Line + "\n"
+		}
 	}
 
-	if err := ship(ctx, projectID, topic, logToLines, lastRunTime); err != nil {
+	if err := ship(ctx, email, projectID, topic, report); err != nil {
 		return errors.WithMessage(err, "error shipping logs")
 	}
 
@@ -839,30 +903,58 @@ func countCharBlocksInString(s string, c rune) int {
 	return count
 }
 
-func ship(
-	ctx context.Context,
-	projectID,
-	topic string,
-	logToLines map[string][]*lib.LogLine,
-	lastRunTime time.Time,
-) error {
+func filterLogLines(
+	allIgnorePatterns []*regexp.Regexp,
+	config LogConfig,
+	lines []*lib.LogLine,
+) []*lib.LogLine {
+	var interestingLines []*lib.LogLine
+	for _, line := range lines {
+		keep := filterLine(config, allIgnorePatterns, line.Line)
+		if !keep {
+			continue
+		}
+		interestingLines = append(interestingLines, line)
+	}
+	return interestingLines
+}
+
+func filterLine(
+	config LogConfig,
+	allIgnorePatterns []*regexp.Regexp,
+	line string,
+) bool {
+	var ignorePatterns []*regexp.Regexp
+	if config.IncludeAllIgnorePatterns {
+		ignorePatterns = allIgnorePatterns
+	} else {
+		ignorePatterns = config.IgnorePatterns
+	}
+
+	for _, re := range ignorePatterns {
+		if re.MatchString(line) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func ship(ctx context.Context, email, projectID, topic, report string) error {
 	hostname, err := getHostname()
 	if err != nil {
 		return err
 	}
 
-	submission := lib.Submission{
-		Hostname:        hostname,
-		EarliestLogTime: lastRunTime,
+	m := pubSubMessage{
+		Body:    report,
+		Subject: "Logs for " + hostname,
+		To:      email,
 	}
 
-	for _, lines := range logToLines {
-		submission.Lines = append(submission.Lines, lines...)
-	}
-
-	submissionJSON, err := json.Marshal(submission)
+	buf, err := json.Marshal(m)
 	if err != nil {
-		return fmt.Errorf("unable to generate JSON: %s", err)
+		return errors.Wrap(err, "error generating JSON")
 	}
 
 	c, err := pubsub.NewClient(ctx, projectID)
@@ -875,7 +967,7 @@ func ship(
 	res := t.Publish(
 		ctx,
 		&pubsub.Message{
-			Data: submissionJSON,
+			Data: buf,
 		},
 	)
 	defer t.Stop()
@@ -903,4 +995,10 @@ func getHostname() (string, error) {
 	}
 
 	return hostname, nil
+}
+
+type pubSubMessage struct {
+	Body    string
+	Subject string
+	To      string
 }

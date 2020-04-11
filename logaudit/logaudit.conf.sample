@@ -3,25 +3,7 @@ FullyIgnore: y
 
 FilenamePattern: apcupsd.events
 TimeLayout: 2006-01-02 15:04:05 -0700
-Ignore: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [-+\d]+  apcupsd [\d.]+ \(\d+ \S+ \d{4}\) debian startup succeeded
-Ignore: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [-+\d]+  UPS Self Test switch to battery
-Ignore: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [-+\d]+  UPS Self Test completed: Battery OK
-Ignore: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [-+\d]+  apcupsd exiting, signal 15
-Ignore: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [-+\d]+  apcupsd shutdown succeeded
-
-FilenamePattern: apport.log*
-FullyIgnore: y
-
-FilenamePattern: bootstrap.log
-FullyIgnore: y
 
 FilenamePattern: apt/history.log*
 TimeLayout: Start-Date: 2006-01-02  15:04:05
-Ignore: ^Start-Date:
-Ignore: ^Commandline:
-Ignore: ^Install:
-Ignore: ^End-Date:
-Ignore: ^Upgrade:
-Ignore: ^Remove:
-Ignore: ^Purge:
-Ignore: ^Requested-By:
+TimestampStrategy: last-line
