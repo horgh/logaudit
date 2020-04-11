@@ -41,9 +41,6 @@ type Args struct {
 	// file as a way to base when to filter logs starting from.
 	StateFile string
 
-	// Location is our time zone location.
-	Location *time.Location
-
 	projectID string
 	topic     string
 }
@@ -152,7 +149,6 @@ func main() {
 		args.topic,
 		logFiles,
 		configs,
-		args.Location,
 		lastRunTime,
 		args.Verbose,
 	); err != nil {
@@ -173,8 +169,12 @@ func getArgs() (Args, error) {
 
 	config := flag.String("config", "", "Path to the configuration file.")
 	email := flag.String("email", "", "Recipient of logs.")
-	stateFile := flag.String("state-file", "", "Path to the state file. Run start time gets recorded here. We filter log lines to those after the run time if the file is present when we start.")
-	locationString := flag.String("location", "America/Vancouver", "IANA Time Zone database name. We treat timestamps as being in this timezone.")
+
+	stateFile := flag.String(
+		"state-file",
+		"",
+		"Path to the state file. Run start time gets recorded here. We filter log lines to those after the run time if the file is present when we start.",
+	)
 
 	projectID := flag.String("project-id", "", "GCP Project ID")
 	topic := flag.String("topic", "", "GCP Pub/Sub topic")
@@ -201,14 +201,6 @@ func getArgs() (Args, error) {
 		return Args{}, fmt.Errorf("you must provide a state file")
 	}
 
-	if len(*locationString) == 0 {
-		return Args{}, fmt.Errorf("please provide a time zone location")
-	}
-	location, err := time.LoadLocation(*locationString)
-	if err != nil {
-		return Args{}, fmt.Errorf("invalid location: %s", err)
-	}
-
 	if *projectID == "" {
 		return Args{}, errors.New("project ID is required")
 	}
@@ -222,7 +214,6 @@ func getArgs() (Args, error) {
 		ConfigFile: *config,
 		email:      *email,
 		StateFile:  *stateFile,
-		Location:   location,
 		projectID:  *projectID,
 		topic:      *topic,
 	}, nil
@@ -563,7 +554,6 @@ func readAndShipLogs(
 	topic string,
 	logFiles []string,
 	logConfigs []LogConfig,
-	location *time.Location,
 	lastRunTime time.Time,
 	verbose bool,
 ) error {
@@ -590,7 +580,7 @@ func readAndShipLogs(
 			continue
 		}
 
-		logLines, err := readLog(logFile, config, location, lastRunTime, verbose)
+		logLines, err := readLog(logFile, config, lastRunTime, verbose)
 		if err != nil {
 			return fmt.Errorf("unable to read log: %s: %s", logFile, err)
 		}
@@ -661,7 +651,6 @@ func fileMatch(root string, path string, subdirPattern string) (bool, error) {
 func readLog(
 	file string,
 	config LogConfig,
-	location *time.Location,
 	lastRunTime time.Time,
 	verbose bool,
 ) ([]*logLine, error) {
@@ -687,7 +676,7 @@ func readLog(
 		return nil, err
 	}
 
-	err = assignTimeToLines(lines, config, location, fi.ModTime())
+	err = assignTimeToLines(lines, config, fi.ModTime())
 	if err != nil {
 		return nil, err
 	}
@@ -786,7 +775,6 @@ func readFileAsLines(path string) ([]*logLine, error) {
 func assignTimeToLines(
 	lines []*logLine,
 	config LogConfig,
-	location *time.Location,
 	modTime time.Time,
 ) error {
 
@@ -797,8 +785,11 @@ func assignTimeToLines(
 	var zeroTime time.Time
 
 	for _, line := range lines {
-		lineTime, err := parseLineTime(line.Line, location, config.TimeRegexp,
-			config.TimeLayouts)
+		lineTime, err := parseLineTime(
+			line.Line,
+			config.TimeRegexp,
+			config.TimeLayouts,
+		)
 		if err != nil {
 			// Be generous and accept it anyway. Apply the last line's timestamp, but
 			// warn about this happening.
@@ -843,11 +834,10 @@ func assignTimeToLines(
 // parseLineTime attempts to parse the timestamp from the log line.
 func parseLineTime(
 	line string,
-	location *time.Location,
 	timeRegexp *regexp.Regexp,
 	timeLayouts []string,
 ) (time.Time, error) {
-	t, err := parseTimestamp(line, location, timeRegexp, timeLayouts)
+	t, err := parseTimestamp(line, timeRegexp, timeLayouts)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -871,7 +861,6 @@ func parseLineTime(
 
 func parseTimestamp(
 	line string,
-	location *time.Location,
 	timeRegexp *regexp.Regexp,
 	timeLayouts []string,
 ) (time.Time, error) {
@@ -908,7 +897,7 @@ func parseTimestamp(
 			lastChar = c
 		}
 
-		t, err := time.ParseInLocation(layout, timestamp, location)
+		t, err := time.ParseInLocation(layout, timestamp, time.Local)
 		if err == nil {
 			return t, nil
 		}
