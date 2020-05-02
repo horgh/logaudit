@@ -60,8 +60,7 @@ func TestParseTimestamp(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		ti, err := parseTimestamp(test.Line, time.UTC, test.TimeRegexp,
-			test.TimeLayouts)
+		ti, err := parseTimestamp(test.Line, test.TimeRegexp, test.TimeLayouts)
 		if err != nil {
 			t.Errorf("parseTimestamp(%s, %s, %s, %v) = error %s, wanted nil",
 				test.Line, time.UTC, test.TimeRegexp, test.TimeLayouts, err)
