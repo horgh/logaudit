@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestFileMatch(t *testing.T) {
@@ -91,5 +93,40 @@ func TestCountCharBlocksInString(t *testing.T) {
 			t.Errorf("countCharBlocksInString(%q) = %v, want %v", test.input, c,
 				test.want)
 		}
+	}
+}
+
+func TestFilterLogLines(t *testing.T) {
+	tests := []struct {
+		name              string
+		allIgnorePatterns []*regexp.Regexp
+		config            LogConfig
+		lines             []*logLine
+		output            []*logLine
+	}{
+		{
+			name:   "Duplicate line gets filtered",
+			config: LogConfig{},
+			lines: []*logLine{
+				{
+					Line: "Something interesting happened",
+				},
+				{
+					Line: "Something interesting happened",
+				},
+			},
+			output: []*logLine{
+				{
+					Line: "Something interesting happened",
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output := filterLogLines(test.allIgnorePatterns, test.config, test.lines)
+			assert.Equal(t, test.output, output, "correct lines")
+		})
 	}
 }

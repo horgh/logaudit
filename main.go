@@ -960,8 +960,16 @@ func filterLine(
 		}
 	}
 
+	// Ignore duplicate lines. Remember this includes timestamp if any.
+	if _, ok := seenLines[line]; ok {
+		return false
+	}
+	seenLines[line] = struct{}{}
+
 	return true
 }
+
+var seenLines map[string]struct{} = map[string]struct{}{}
 
 func ship(ctx context.Context, email, projectID, topic, report string) error {
 	hostname, err := getHostname()
